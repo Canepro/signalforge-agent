@@ -12,6 +12,7 @@ SERVICE_TARGET_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 ENV_TARGET_PATH="/etc/${SERVICE_NAME}.env"
 AGENT_USER="${SUDO_USER:-$(id -un)}"
 WORKDIR="$REPO_DIR"
+BUN_BIN=""
 
 usage() {
   cat <<EOF
@@ -24,6 +25,7 @@ Options:
   --env-source <path>    repo-local env file to install (default: ${ENV_SOURCE_PATH})
   --env-target <path>    installed env file path (default: ${ENV_TARGET_PATH})
   --service-name <name>  systemd unit name without .service (default: ${SERVICE_NAME})
+  --bun <path>           absolute bun binary path (default: auto-detect)
   --help                 show this help
 
 Workflow:
@@ -57,6 +59,10 @@ while [[ $# -gt 0 ]]; do
       ENV_TARGET_PATH="/etc/${SERVICE_NAME}.env"
       shift 2
       ;;
+    --bun)
+      BUN_BIN="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -76,6 +82,21 @@ fi
 
 if [[ ! -f "$TEMPLATE_PATH" ]]; then
   echo "Missing service template: $TEMPLATE_PATH" >&2
+  exit 1
+fi
+
+if [[ -z "$BUN_BIN" ]]; then
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    BUN_BIN="$(su - "$SUDO_USER" -c 'command -v bun' 2>/dev/null || true)"
+  fi
+fi
+
+if [[ -z "$BUN_BIN" ]] && command -v bun >/dev/null 2>&1; then
+  BUN_BIN="$(command -v bun)"
+fi
+
+if [[ -z "$BUN_BIN" || ! -x "$BUN_BIN" ]]; then
+  echo "Could not find an executable bun binary. Re-run with --bun /absolute/path/to/bun" >&2
   exit 1
 fi
 
@@ -113,6 +134,7 @@ sed \
   -e "s|__SIGNALFORGE_AGENT_USER__|${AGENT_USER}|g" \
   -e "s|__SIGNALFORGE_AGENT_WORKDIR__|${WORKDIR}|g" \
   -e "s|__SIGNALFORGE_AGENT_ENV_FILE__|${ENV_TARGET_PATH}|g" \
+  -e "s|__SIGNALFORGE_AGENT_BUN__|${BUN_BIN}|g" \
   "$TEMPLATE_PATH" > "$SERVICE_TARGET_PATH"
 
 chmod 644 "$SERVICE_TARGET_PATH"

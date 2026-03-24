@@ -135,7 +135,7 @@ $EDITOR contrib/systemd/signalforge-agent.env
 sudo ./scripts/install-systemd-service.sh
 ```
 
-The installer copies your env file to `/etc/signalforge-agent.env`, renders the service with the current checkout path and user, then runs:
+The installer copies your env file to `/etc/signalforge-agent.env`, renders the service with the current checkout path, user, and absolute Bun binary, then runs:
 
 - `systemctl daemon-reload`
 - `systemctl enable --now signalforge-agent`

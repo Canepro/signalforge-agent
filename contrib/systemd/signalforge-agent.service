@@ -8,7 +8,7 @@ Type=simple
 User=__SIGNALFORGE_AGENT_USER__
 WorkingDirectory=__SIGNALFORGE_AGENT_WORKDIR__
 EnvironmentFile=__SIGNALFORGE_AGENT_ENV_FILE__
-ExecStart=/usr/bin/env bun run src/cli.ts run
+ExecStart=__SIGNALFORGE_AGENT_BUN__ run src/cli.ts run
 Restart=always
 RestartSec=5
 
