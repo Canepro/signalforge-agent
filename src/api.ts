@@ -111,10 +111,13 @@ export class SignalForgeAgentClient {
     >;
   }
 
-  async jobsNext(limit: number): Promise<{ jobs: unknown[]; gate: string | null }> {
+  async jobsNext(
+    limit: number,
+    waitSeconds = 0
+  ): Promise<{ jobs: unknown[]; gate: string | null }> {
     const data = (await this.requestJson(
       "GET",
-      `/api/agent/jobs/next?limit=${encodeURIComponent(String(limit))}`
+      `/api/agent/jobs/next?limit=${encodeURIComponent(String(limit))}&wait_seconds=${encodeURIComponent(String(waitSeconds))}`
     )) as Record<string, unknown>;
     const jobs = Array.isArray(data.jobs) ? data.jobs : [];
     const gate = data.gate == null || data.gate === null ? null : String(data.gate);

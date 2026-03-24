@@ -8,6 +8,7 @@ const KEYS = [
   "SIGNALFORGE_AGENT_INSTANCE_ID",
   "SIGNALFORGE_COLLECTORS_DIR",
   "SIGNALFORGE_POLL_INTERVAL_MS",
+  "SIGNALFORGE_JOBS_WAIT_SECONDS",
   "SIGNALFORGE_AGENT_ARTIFACT_FILE",
   "SIGNALFORGE_AGENT_VERSION",
   "SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS",
@@ -55,6 +56,24 @@ describe("loadConfig", () => {
     process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
     process.env.SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS = "5000";
     expect(loadConfig().leaseHeartbeatMs).toBe(5000);
+  });
+
+  test("parses optional jobs wait seconds", () => {
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
+    process.env.SIGNALFORGE_JOBS_WAIT_SECONDS = "7";
+    expect(loadConfig().jobsWaitSeconds).toBe(7);
+  });
+
+  test("rejects jobs wait seconds over 20", () => {
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
+    process.env.SIGNALFORGE_JOBS_WAIT_SECONDS = "21";
+    expect(() => loadConfig()).toThrow(ConfigError);
   });
 
   test("rejects lease heartbeat under 1000", () => {

@@ -32,6 +32,7 @@ function testConfig(): AgentConfig {
     instanceId: "test-instance",
     collectorsDir: "/tmp/collectors",
     pollIntervalMs: 30_000,
+    jobsWaitSeconds: 20,
     artifactFileOverride: null,
     agentVersion: "0.1.0-test",
     leaseHeartbeatMs: 45_000,
@@ -54,6 +55,25 @@ describe("runSingleCycle", () => {
     };
     const r = await runSingleCycle(testConfig(), fetchImpl);
     expect(r).toEqual({ kind: "noop", reason: "no_job", gate: null });
+  });
+
+  test("passes wait_seconds to jobs/next when requested", async () => {
+    let seenUrl = "";
+    const fetchImpl: FetchLike = async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/api/agent/heartbeat")) {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      if (url.includes("/api/agent/jobs/next")) {
+        seenUrl = url;
+        return new Response(JSON.stringify({ jobs: [], gate: null }), {
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+    await runSingleCycle(testConfig(), fetchImpl, { waitSeconds: 12 });
+    expect(seenUrl).toContain("wait_seconds=12");
   });
 
   test("returns error 5 on claim 409", async () => {

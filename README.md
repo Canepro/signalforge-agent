@@ -48,7 +48,8 @@ All configuration is **environment variables** (see `.env.example`).
 | `SIGNALFORGE_AGENT_TOKEN` | yes | Bearer token from `POST /api/agent/registrations` (one source per token) |
 | `SIGNALFORGE_AGENT_INSTANCE_ID` | yes | Opaque stable id for **this process**; must match claim/start/fail/artifact and lease-extension heartbeats |
 | `SIGNALFORGE_COLLECTORS_DIR` | yes* | Absolute path to **signalforge-collectors** root (`first-audit.sh` lives there) |
-| `SIGNALFORGE_POLL_INTERVAL_MS` | no | Default `30000`; minimum `1000` |
+| `SIGNALFORGE_POLL_INTERVAL_MS` | no | Default `30000`; minimum `1000`; backoff after gate/error in `run` mode |
+| `SIGNALFORGE_JOBS_WAIT_SECONDS` | no | Default `20`; max `20`; bounded long-poll window for `GET /api/agent/jobs/next` in `run` mode |
 | `SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS` | no | Default `45000`; minimum `1000` — interval for mid-job lease heartbeats while collecting |
 | `SIGNALFORGE_AGENT_ARTIFACT_FILE` | no | If set, **skip** `first-audit.sh` and upload this file (tests / air-gapped) |
 | `SIGNALFORGE_AGENT_VERSION` | no | Sent as `agent_version` on heartbeat (default: package version) |
@@ -69,7 +70,7 @@ export SIGNALFORGE_COLLECTORS_DIR="$HOME/src/signalforge-collectors"
 | Command | Behavior |
 |---------|----------|
 | `signalforge-agent once` | Idle heartbeat → poll **one** `GET /api/agent/jobs/next` → if a job exists, claim → start → collect → `POST …/artifact` → exit |
-| `signalforge-agent run` | Same as one cycle, then sleep `SIGNALFORGE_POLL_INTERVAL_MS` and repeat |
+| `signalforge-agent run` | Idle heartbeat → long-poll `GET /api/agent/jobs/next` → process work immediately when available; backs off by `SIGNALFORGE_POLL_INTERVAL_MS` on gate/error paths |
 | `signalforge-agent help` | Usage and env summary |
 | `signalforge-agent version` | Print version |
 
@@ -92,7 +93,7 @@ In **`run`** mode, **claim conflict (5)** is logged and the loop continues after
 1. **Operator** creates a **Source** and enrolls an agent: `POST /api/agent/registrations` → save `token`.
 2. **Operator** clicks “Collect Fresh Evidence” (or `POST …/collection-jobs`) → job is **queued**.
 3. **Agent** `POST /api/agent/heartbeat` with capabilities `collect:linux-audit-log` and `upload:multipart` (required for strict gating on `jobs/next`).
-4. **Agent** `GET /api/agent/jobs/next?limit=1`.
+4. **Agent** `GET /api/agent/jobs/next?limit=1` (and in `run` mode, `wait_seconds` for bounded long-poll).
 5. **Agent** `POST /api/collection-jobs/{id}/claim` with `instance_id` + lease TTL.
 6. **Agent** `POST /api/collection-jobs/{id}/start` with `instance_id`.
 7. **Immediately** and on **`SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS`**, **agent** sends mid-job heartbeats with `active_job_id` + `instance_id`. If the response includes `active_job_lease.extended === false`, the agent **stops**: it aborts `first-audit.sh` (if running), **does not upload**, and `POST …/fail` with code **`lease_not_extended`** so the job is not left ambiguously “running” on the client side.
@@ -113,8 +114,29 @@ Contract details: SignalForge [`plans/phase-6b-source-job-api-contract.md`](http
 
 - One **source** per token; one **active job** at a time per process.
 - **Linux / WSL** only; `linux-audit-log` only.
-- **Polling** only (no long-poll, no scheduler, no systemd installer).
+- No realtime push/broker; bounded long-poll only.
 - No token rotation, notifications, or multi-source agents.
+
+## Run As A Service
+
+For normal operator use, prefer a long-running service over repeated manual `once` calls.
+
+Example `systemd` unit:
+
+```ini
+/home/vincent/src/signalforge-agent/contrib/systemd/signalforge-agent.service
+```
+
+Then:
+
+```bash
+sudo cp contrib/systemd/signalforge-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now signalforge-agent
+sudo systemctl status signalforge-agent
+```
+
+If you want fixed-time scheduled collection instead, use cron or a systemd timer with `signalforge-agent once`, but that is less responsive for operator-triggered “collect now” requests because queued jobs wait until the next invocation.
 
 ## Development
 

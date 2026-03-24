@@ -1,0 +1,19 @@
+[Unit]
+Description=SignalForge agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vincent
+WorkingDirectory=/home/vincent/src/signalforge-agent
+Environment=SIGNALFORGE_URL=https://signalforge-zeta.vercel.app
+Environment=SIGNALFORGE_AGENT_TOKEN=replace-me
+Environment=SIGNALFORGE_AGENT_INSTANCE_ID=%H-agent-1
+Environment=SIGNALFORGE_COLLECTORS_DIR=/home/vincent/src/signalforge-collectors
+ExecStart=/usr/bin/env bun run src/cli.ts run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

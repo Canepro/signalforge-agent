@@ -43,7 +43,8 @@ function leaseRejectDetail(hb: Record<string, unknown>): string | null {
  */
 export async function idleHeartbeatAndPoll(
   client: SignalForgeAgentClient,
-  cfg: AgentConfig
+  cfg: AgentConfig,
+  waitSeconds = 0
 ): Promise<IdleHeartbeatResult> {
   await client.heartbeat({
     capabilities: [...CAPABILITIES],
@@ -52,7 +53,7 @@ export async function idleHeartbeatAndPoll(
     active_job_id: null,
   });
 
-  const { jobs, gate } = await client.jobsNext(1);
+  const { jobs, gate } = await client.jobsNext(1, waitSeconds);
   return { gate, jobs };
 }
 
@@ -262,11 +263,16 @@ export async function processOneQueuedJob(
  */
 export async function runSingleCycle(
   cfg: AgentConfig,
-  fetchImpl?: FetchLike
+  fetchImpl?: FetchLike,
+  options?: { waitSeconds?: number }
 ): Promise<ProcessJobResult> {
   const client = createClient(cfg.baseUrl, cfg.agentToken, fetchImpl);
 
-  const { gate, jobs } = await idleHeartbeatAndPoll(client, cfg);
+  const { gate, jobs } = await idleHeartbeatAndPoll(
+    client,
+    cfg,
+    options?.waitSeconds ?? 0
+  );
   if (jobs.length === 0) {
     return { kind: "noop", reason: "no_job", gate };
   }

@@ -40,7 +40,8 @@ Environment (see .env.example):
   SIGNALFORGE_AGENT_TOKEN                Source-bound agent Bearer token
   SIGNALFORGE_AGENT_INSTANCE_ID          Opaque stable id for this process
   SIGNALFORGE_COLLECTORS_DIR             Path to signalforge-collectors (first-audit.sh)
-  SIGNALFORGE_POLL_INTERVAL_MS           Optional; default 30000 (run mode)
+  SIGNALFORGE_POLL_INTERVAL_MS           Optional; default 30000 (run-mode backoff)
+  SIGNALFORGE_JOBS_WAIT_SECONDS          Optional; default 20, max 20 (run-mode long-poll)
   SIGNALFORGE_AGENT_ARTIFACT_FILE        Optional; upload file instead of running collector
   SIGNALFORGE_AGENT_VERSION              Optional; reported to heartbeat (default ${VERSION})
 
@@ -81,18 +82,25 @@ async function cmdOnce(): Promise<number> {
 
 async function cmdRun(): Promise<number> {
   const cfg = loadConfig();
-  logInfo(`poll loop started (interval ${cfg.pollIntervalMs}ms)`);
+  logInfo(
+    `poll loop started (long-poll ${cfg.jobsWaitSeconds}s, backoff ${cfg.pollIntervalMs}ms)`
+  );
   for (;;) {
+    let shouldSleep = false;
     try {
-      const r = await runSingleCycle(cfg);
+      const r = await runSingleCycle(cfg, undefined, {
+        waitSeconds: cfg.jobsWaitSeconds,
+      });
       if (r.kind === "noop") {
         logInfo(`no queued job (gate=${r.gate ?? "null"})`);
+        shouldSleep = r.gate !== null;
       } else if (r.kind === "processed") {
         logInfo(
           `job ${r.jobId} finished (run_status=${r.runStatus ?? "?"}, result_analysis_status=${r.analysisStatus ?? "?"})`
         );
       } else {
         logError(r.message);
+        shouldSleep = true;
         if (r.code === EXIT.CLAIM_CONFLICT) {
           logWarn("claim conflict — another worker may hold the lease; will retry after interval");
         } else {
@@ -105,8 +113,11 @@ async function cmdRun(): Promise<number> {
         return EXIT.AUTH;
       }
       logError(`cycle error: ${e instanceof Error ? e.message : String(e)}`);
+      shouldSleep = true;
     }
-    await sleep(cfg.pollIntervalMs);
+    if (shouldSleep) {
+      await sleep(cfg.pollIntervalMs);
+    }
   }
 }
 
