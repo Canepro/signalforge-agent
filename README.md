@@ -121,19 +121,30 @@ Contract details: SignalForge [`plans/phase-6b-source-job-api-contract.md`](http
 
 For normal operator use, prefer a long-running service over repeated manual `once` calls.
 
-Example `systemd` unit:
+The repo includes:
 
-```ini
-/home/vincent/src/signalforge-agent/contrib/systemd/signalforge-agent.service
-```
+- `contrib/systemd/signalforge-agent.service` — template rendered by the installer
+- `contrib/systemd/signalforge-agent.env.example` — copy to a local env file and fill once
+- `scripts/install-systemd-service.sh` — installs the env file and service, reloads `systemd`, and enables the unit
 
-Then:
+Recommended flow:
 
 ```bash
-sudo cp contrib/systemd/signalforge-agent.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now signalforge-agent
-sudo systemctl status signalforge-agent
+cp contrib/systemd/signalforge-agent.env.example contrib/systemd/signalforge-agent.env
+$EDITOR contrib/systemd/signalforge-agent.env
+sudo ./scripts/install-systemd-service.sh
+```
+
+The installer copies your env file to `/etc/signalforge-agent.env`, renders the service with the current checkout path and user, then runs:
+
+- `systemctl daemon-reload`
+- `systemctl enable --now signalforge-agent`
+
+After install:
+
+```bash
+systemctl status signalforge-agent
+journalctl -u signalforge-agent -f
 ```
 
 If you want fixed-time scheduled collection instead, use cron or a systemd timer with `signalforge-agent once`, but that is less responsive for operator-triggered “collect now” requests because queued jobs wait until the next invocation.
