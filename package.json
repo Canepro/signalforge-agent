@@ -1,0 +1,23 @@
+{
+  "name": "signalforge-agent",
+  "version": "0.1.0",
+  "description": "Thin execution-plane agent for SignalForge collection jobs (poll, claim, run signalforge-collectors, upload)",
+  "type": "module",
+  "bin": {
+    "signalforge-agent": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "devDependencies": {
+    "bun-types": "^1.2.5",
+    "typescript": "^5.8.2"
+  },
+  "license": "MIT",
+  "private": true
+}

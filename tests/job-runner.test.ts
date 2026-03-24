@@ -1,0 +1,268 @@
+import { unlink } from "node:fs/promises";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { FetchLike } from "../src/api.ts";
+import type { AgentConfig } from "../src/config.ts";
+import { runSingleCycle } from "../src/job-runner.ts";
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+const ENV_KEYS = [
+  "SIGNALFORGE_URL",
+  "SIGNALFORGE_AGENT_TOKEN",
+  "SIGNALFORGE_AGENT_INSTANCE_ID",
+  "SIGNALFORGE_COLLECTORS_DIR",
+] as const;
+
+function clearEnv(): void {
+  for (const k of ENV_KEYS) delete process.env[k];
+}
+
+beforeEach(() => clearEnv());
+afterEach(() => clearEnv());
+
+function testConfig(): AgentConfig {
+  return {
+    baseUrl: "http://localhost:3000",
+    agentToken: "test-token",
+    instanceId: "test-instance",
+    collectorsDir: "/tmp/collectors",
+    pollIntervalMs: 30_000,
+    artifactFileOverride: null,
+    agentVersion: "0.1.0-test",
+    leaseHeartbeatMs: 45_000,
+  };
+}
+
+describe("runSingleCycle", () => {
+  test("noop when jobs list empty", async () => {
+    const fetchImpl: FetchLike = async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/api/agent/heartbeat")) {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      if (url.includes("/api/agent/jobs/next")) {
+        return new Response(JSON.stringify({ jobs: [], gate: null }), {
+          status: 200,
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+    const r = await runSingleCycle(testConfig(), fetchImpl);
+    expect(r).toEqual({ kind: "noop", reason: "no_job", gate: null });
+  });
+
+  test("returns error 5 on claim 409", async () => {
+    const fetchImpl: FetchLike = async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/api/agent/heartbeat")) {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/api/agent/jobs/next")) {
+        return new Response(
+          JSON.stringify({
+            jobs: [{ id: "11111111-1111-1111-1111-111111111111" }],
+            gate: null,
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/claim")) {
+        return new Response(JSON.stringify({ code: "not_queued" }), {
+          status: 409,
+        });
+      }
+      return new Response("{}", { status: 500 });
+    };
+    const r = await runSingleCycle(testConfig(), fetchImpl);
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") {
+      expect(r.code).toBe(5);
+      expect(r.message).toContain("claim");
+    }
+  });
+
+  test("treats artifact 409 job_already_submitted as processed", async () => {
+    const jobId = "22222222-2222-2222-2222-222222222222";
+    const fetchImpl: FetchLike = async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/api/agent/heartbeat")) {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/api/agent/jobs/next")) {
+        return new Response(
+          JSON.stringify({ jobs: [{ id: jobId }], gate: null }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/claim")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/start")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/artifact")) {
+        return new Response(
+          JSON.stringify({ code: "job_already_submitted" }),
+          { status: 409 }
+        );
+      }
+      if (url.includes("/fail")) {
+        return new Response("unexpected fail", { status: 500 });
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    const fixture = join(import.meta.dir, "fixture-audit.log");
+    const cfg = {
+      ...testConfig(),
+      artifactFileOverride: fixture,
+    };
+
+    await Bun.write(
+      fixture,
+      "=== signalforge-collectors ===\nhostname: t\n=== uname -a ===\nLinux t 1.0 x86_64\n"
+    );
+    try {
+      const r = await runSingleCycle(cfg, fetchImpl);
+      expect(r).toEqual({ kind: "processed", jobId });
+    } finally {
+      try {
+        await unlink(fixture);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  test("POST fail lease_not_extended when first mid-job heartbeat rejects lease", async () => {
+    const jobId = "33333333-3333-3333-3333-333333333333";
+    let failBody: string | null = null;
+    const fetchImpl: FetchLike = async (input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/agent/heartbeat") && method === "POST") {
+        const raw = init?.body;
+        const body =
+          typeof raw === "string" ?
+            (JSON.parse(raw) as { active_job_id?: string | null })
+          : {};
+        if (body.active_job_id != null) {
+          return new Response(
+            JSON.stringify({
+              active_job_lease: { extended: false, code: "lease_expired" },
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/api/agent/jobs/next")) {
+        return new Response(
+          JSON.stringify({ jobs: [{ id: jobId }], gate: null }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/claim")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/start")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/fail") && method === "POST") {
+        failBody = typeof init?.body === "string" ? init.body : null;
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      return new Response("unexpected", { status: 500 });
+    };
+
+    const r = await runSingleCycle(testConfig(), fetchImpl);
+    expect(r.kind).toBe("error");
+    if (r.kind === "error") expect(r.code).toBe(4);
+    if (failBody == null) throw new Error("expected POST /fail body");
+    const parsed = JSON.parse(failBody) as { code?: string; message?: string };
+    expect(parsed.code).toBe("lease_not_extended");
+    expect(parsed.message).toContain("lease_expired");
+  });
+
+  test("POST fail lease_not_extended when pre-upload heartbeat rejects lease", async () => {
+    const jobId = "44444444-4444-4444-4444-444444444444";
+    let midCount = 0;
+    let failBody: string | null = null;
+    const fetchImpl: FetchLike = async (input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/agent/heartbeat") && method === "POST") {
+        const raw = init?.body;
+        const body =
+          typeof raw === "string" ?
+            (JSON.parse(raw) as { active_job_id?: string | null })
+          : {};
+        if (body.active_job_id != null) {
+          midCount += 1;
+          if (midCount === 1) {
+            return new Response(
+              JSON.stringify({ active_job_lease: { extended: true } }),
+              { status: 200 }
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              active_job_lease: { extended: false, code: "stall" },
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/api/agent/jobs/next")) {
+        return new Response(
+          JSON.stringify({ jobs: [{ id: jobId }], gate: null }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/claim")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/start")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/artifact")) {
+        return new Response("should not upload", { status: 500 });
+      }
+      if (url.includes("/fail") && method === "POST") {
+        failBody = typeof init?.body === "string" ? init.body : null;
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      return new Response("unexpected", { status: 500 });
+    };
+
+    const fixture = join(import.meta.dir, "lease-preupload.log");
+    const cfg = {
+      ...testConfig(),
+      artifactFileOverride: fixture,
+      leaseHeartbeatMs: 60_000,
+    };
+    await Bun.write(fixture, "artifact bytes\n");
+    try {
+      const r = await runSingleCycle(cfg, fetchImpl);
+      expect(r.kind).toBe("error");
+      if (r.kind === "error") expect(r.code).toBe(4);
+      expect(midCount).toBe(2);
+      if (failBody == null) throw new Error("expected POST /fail body");
+      const parsed = JSON.parse(failBody) as { code?: string; message?: string };
+      expect(parsed.code).toBe("lease_not_extended");
+      expect(parsed.message).toContain("stall");
+    } finally {
+      try {
+        await unlink(fixture);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+});
