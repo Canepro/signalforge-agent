@@ -1,6 +1,6 @@
 # signalforge-agent
 
-Thin **execution-plane** runtime for [SignalForge](https://github.com/Canepro/signalforge): it authenticates with a **source-bound** agent token, heartbeats, polls for **collection jobs**, claims and starts them, runs collectors from **[signalforge-collectors](https://github.com/Canepro/signalforge-collectors)**, uploads the artifact, and reports failures.
+Thin **execution-plane** runtime for [SignalForge](https://github.com/Canepro/signalforge): it authenticates with a **source-bound** agent token, heartbeats, polls for **collection jobs**, claims and starts them, dispatches family-specific collectors from **[signalforge-collectors](https://github.com/Canepro/signalforge-collectors)**, uploads the artifact, and reports failures.
 
 ## Boundaries
 
@@ -8,14 +8,14 @@ Thin **execution-plane** runtime for [SignalForge](https://github.com/Canepro/si
 |------|------|
 | **signalforge** | Control plane: sources, jobs, registrations, analysis, UI. |
 | **signalforge-collectors** | Collector **implementations** only (e.g. `first-audit.sh`). No job API client here. |
-| **signalforge-agent** (this repo) | Orchestration: HTTP to SignalForge + **fixed** local invocation of collectors. |
+| **signalforge-agent** (this repo) | Orchestration: HTTP to SignalForge + local invocation of family-specific collectors. |
 
 SignalForge never runs collectors on your hosts; this agent never reimplements collector logic.
 
 ## Requirements
 
 - [Bun](https://bun.sh) ≥ 1.1
-- Linux or WSL (first slice)
+- Linux or WSL for the host-agent slice
 - A checkout of **signalforge-collectors** on the same machine (unless using file override mode)
 
 ## Install
@@ -47,11 +47,12 @@ All configuration is **environment variables** (see `.env.example`).
 | `SIGNALFORGE_URL` or `SIGNALFORGE_BASE_URL` | yes | Origin only, no trailing slash (e.g. `http://localhost:3000`) |
 | `SIGNALFORGE_AGENT_TOKEN` | yes | Bearer token from `POST /api/agent/registrations` (one source per token) |
 | `SIGNALFORGE_AGENT_INSTANCE_ID` | yes | Opaque stable id for **this process**; must match claim/start/fail/artifact and lease-extension heartbeats |
-| `SIGNALFORGE_COLLECTORS_DIR` | yes* | Absolute path to **signalforge-collectors** root (`first-audit.sh` lives there) |
+| `SIGNALFORGE_COLLECTORS_DIR` | yes* | Absolute path to **signalforge-collectors** root (family-specific collector scripts live there) |
+| `SIGNALFORGE_AGENT_CAPABILITIES` | no | Comma-separated heartbeat capabilities. When omitted, the agent derives capabilities from local readiness and always includes `upload:multipart` |
 | `SIGNALFORGE_POLL_INTERVAL_MS` | no | Default `30000`; minimum `1000`; backoff after gate/error in `run` mode |
 | `SIGNALFORGE_JOBS_WAIT_SECONDS` | no | Default `20`; max `20`; bounded long-poll window for `GET /api/agent/jobs/next` in `run` mode |
 | `SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS` | no | Default `45000`; minimum `1000` — interval for mid-job lease heartbeats while collecting |
-| `SIGNALFORGE_AGENT_ARTIFACT_FILE` | no | If set, **skip** `first-audit.sh` and upload this file (tests / air-gapped) |
+| `SIGNALFORGE_AGENT_ARTIFACT_FILE` | no | If set, **skip** collector dispatch and upload this file (tests / air-gapped) |
 | `SIGNALFORGE_AGENT_VERSION` | no | Sent as `agent_version` on heartbeat (default: package version) |
 
 \* Not required when `SIGNALFORGE_AGENT_ARTIFACT_FILE` is set.
@@ -63,6 +64,8 @@ export SIGNALFORGE_URL=http://localhost:3000
 export SIGNALFORGE_AGENT_TOKEN='…'
 export SIGNALFORGE_AGENT_INSTANCE_ID="$(hostname)-agent-1"
 export SIGNALFORGE_COLLECTORS_DIR="$HOME/src/signalforge-collectors"
+# Optional override. If omitted, the agent advertises only the families it can run locally.
+export SIGNALFORGE_AGENT_CAPABILITIES='collect:linux-audit-log,upload:multipart'
 ```
 
 ## Commands
@@ -92,14 +95,14 @@ In **`run`** mode, **claim conflict (5)** is logged and the loop continues after
 
 1. **Operator** creates a **Source** and enrolls an agent: `POST /api/agent/registrations` → save `token`.
 2. **Operator** clicks “Collect Fresh Evidence” (or `POST …/collection-jobs`) → job is **queued**.
-3. **Agent** `POST /api/agent/heartbeat` with capabilities `collect:linux-audit-log` and `upload:multipart` (required for strict gating on `jobs/next`).
+3. **Agent** `POST /api/agent/heartbeat` with a configured capability set. When not explicitly overridden, it derives that set from locally runnable collectors and always includes `upload:multipart` (required for strict gating on `jobs/next`).
 4. **Agent** `GET /api/agent/jobs/next?limit=1` (and in `run` mode, `wait_seconds` for bounded long-poll).
 5. **Agent** `POST /api/collection-jobs/{id}/claim` with `instance_id` + lease TTL.
 6. **Agent** `POST /api/collection-jobs/{id}/start` with `instance_id`.
-7. **Immediately** and on **`SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS`**, **agent** sends mid-job heartbeats with `active_job_id` + `instance_id`. If the response includes `active_job_lease.extended === false`, the agent **stops**: it aborts `first-audit.sh` (if running), **does not upload**, and `POST …/fail` with code **`lease_not_extended`** so the job is not left ambiguously “running” on the client side.
-8. **Agent** runs **`bash first-audit.sh`** with `cwd` = `SIGNALFORGE_COLLECTORS_DIR`, then requires a **`server_audit_YYYYMMDD_HHMMSS.log` that is new or has a newer mtime than before the run** (refuses stale files). Or uses `SIGNALFORGE_AGENT_ARTIFACT_FILE`.
+7. **Immediately** and on **`SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS`**, **agent** sends mid-job heartbeats with `active_job_id` + `instance_id`. If the response includes `active_job_lease.extended === false`, the agent **stops**: it aborts the running collector script, **does not upload**, and `POST …/fail` with code **`lease_not_extended`** so the job is not left ambiguously “running” on the client side.
+8. **Agent** dispatches by `job.artifact_type`: `linux-audit-log` runs **`bash first-audit.sh`**, `container-diagnostics` runs **`bash collect-container-diagnostics.sh`**, and `kubernetes-bundle` runs **`bash collect-kubernetes-bundle.sh`** from `SIGNALFORGE_COLLECTORS_DIR`, then requires a family-specific artifact that is new or has a newer mtime than before the run. Or it uses `SIGNALFORGE_AGENT_ARTIFACT_FILE`.
 9. **Another** mid-job heartbeat runs **immediately before** `POST …/artifact` to catch lease loss after a long collection.
-10. **Agent** `POST /api/collection-jobs/{id}/artifact` with multipart `file` + form field `instance_id`.
+10. **Agent** `POST /api/collection-jobs/{id}/artifact` with multipart `file` + form fields `instance_id` and `artifact_type`.
 11. On collector or upload failure, **agent** `POST …/fail` with `instance_id`, `code` (`collector_failed`, `agent_failed`, or `lease_not_extended`), and `message`. stderr includes server error bodies when available.
 
 Contract details: SignalForge [`plans/phase-6b-source-job-api-contract.md`](https://github.com/Canepro/signalforge/blob/main/plans/phase-6b-source-job-api-contract.md), [`docs/api-contract.md`](https://github.com/Canepro/signalforge/blob/main/docs/api-contract.md).
@@ -107,13 +110,14 @@ Contract details: SignalForge [`plans/phase-6b-source-job-api-contract.md`](http
 ## Collector invocation
 
 - **No** audit logic lives in this repo.
-- The agent only spawns `first-audit.sh` from **signalforge-collectors** (or uploads an override file). It snapshots existing `server_audit_*.log` files before the script and only accepts a log that appeared or was updated by that run.
+- The agent dispatches a fixed script per supported artifact family from **signalforge-collectors** and only accepts a fresh artifact from that family. It snapshots matching output files before the script and refuses stale files.
 - To change *how* evidence is gathered, edit **signalforge-collectors**, not this agent.
 
 ## Limitations (v0.1)
 
 - One **source** per token; one **active job** at a time per process.
-- **Linux / WSL** only; `linux-audit-log` only.
+- **Linux / WSL** host-agent slice by default, but the execution path now advertises and dispatches `linux-audit-log`, `container-diagnostics`, and `kubernetes-bundle` capabilities.
+- Container and Kubernetes jobs still depend on collector-side environment and access. For example, `collect-container-diagnostics.sh` needs a target container reference, and `collect-kubernetes-bundle.sh` needs a working `kubectl` context plus the intended scope. The current SignalForge job model does not yet send family-specific runtime parameters per job, so one agent process should only advertise those families when its local environment is deliberately prepared for them.
 - No realtime push/broker; bounded long-poll only.
 - No token rotation, notifications, or multi-source agents.
 

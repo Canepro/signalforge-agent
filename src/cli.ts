@@ -27,7 +27,7 @@ function sleep(ms: number): Promise<void> {
 function printHelp(): void {
   console.log(`signalforge-agent ${VERSION}
 
-Execution-plane agent for SignalForge: heartbeat, poll, claim, run signalforge-collectors, upload.
+Execution-plane agent for SignalForge: heartbeat, poll, claim, dispatch collector scripts from signalforge-collectors, upload.
 
 Usage:
   signalforge-agent once    Heartbeat + process at most one queued job, then exit
@@ -39,7 +39,8 @@ Environment (see .env.example):
   SIGNALFORGE_URL / SIGNALFORGE_BASE_URL   SignalForge origin (no trailing slash)
   SIGNALFORGE_AGENT_TOKEN                Source-bound agent Bearer token
   SIGNALFORGE_AGENT_INSTANCE_ID          Opaque stable id for this process
-  SIGNALFORGE_COLLECTORS_DIR             Path to signalforge-collectors (first-audit.sh)
+  SIGNALFORGE_COLLECTORS_DIR             Path to signalforge-collectors collector scripts
+  SIGNALFORGE_AGENT_CAPABILITIES         Optional comma-separated heartbeat capabilities override
   SIGNALFORGE_POLL_INTERVAL_MS           Optional; default 30000 (run-mode backoff)
   SIGNALFORGE_JOBS_WAIT_SECONDS          Optional; default 20, max 20 (run-mode long-poll)
   SIGNALFORGE_AGENT_ARTIFACT_FILE        Optional; upload file instead of running collector

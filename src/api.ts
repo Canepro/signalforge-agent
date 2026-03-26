@@ -153,6 +153,7 @@ export class SignalForgeAgentClient {
   async uploadArtifact(
     jobId: string,
     instanceId: string,
+    artifactType: string,
     filePath: string,
     filename: string
   ): Promise<Record<string, unknown>> {
@@ -161,6 +162,7 @@ export class SignalForgeAgentClient {
     const form = new FormData();
     form.set("file", file, filename);
     form.set("instance_id", instanceId);
+    form.set("artifact_type", artifactType);
 
     const res = await this.fetchImpl(url, {
       method: "POST",

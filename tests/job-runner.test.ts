@@ -1,5 +1,6 @@
-import { unlink } from "node:fs/promises";
+import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { FetchLike } from "../src/api.ts";
 import type { AgentConfig } from "../src/config.ts";
@@ -31,6 +32,12 @@ function testConfig(): AgentConfig {
     agentToken: "test-token",
     instanceId: "test-instance",
     collectorsDir: "/tmp/collectors",
+    capabilities: [
+      "collect:linux-audit-log",
+      "collect:container-diagnostics",
+      "collect:kubernetes-bundle",
+      "upload:multipart",
+    ],
     pollIntervalMs: 30_000,
     jobsWaitSeconds: 20,
     artifactFileOverride: null,
@@ -83,9 +90,14 @@ describe("runSingleCycle", () => {
         return new Response("{}", { status: 200 });
       }
       if (url.includes("/api/agent/jobs/next")) {
-        return new Response(
-          JSON.stringify({
-            jobs: [{ id: "11111111-1111-1111-1111-111111111111" }],
+          return new Response(
+            JSON.stringify({
+            jobs: [
+              {
+                id: "11111111-1111-1111-1111-111111111111",
+                artifact_type: "linux-audit-log",
+              },
+            ],
             gate: null,
           }),
           { status: 200 }
@@ -115,7 +127,10 @@ describe("runSingleCycle", () => {
       }
       if (url.includes("/api/agent/jobs/next")) {
         return new Response(
-          JSON.stringify({ jobs: [{ id: jobId }], gate: null }),
+          JSON.stringify({
+            jobs: [{ id: jobId, artifact_type: "linux-audit-log" }],
+            gate: null,
+          }),
           { status: 200 }
         );
       }
@@ -183,7 +198,10 @@ describe("runSingleCycle", () => {
       }
       if (url.includes("/api/agent/jobs/next")) {
         return new Response(
-          JSON.stringify({ jobs: [{ id: jobId }], gate: null }),
+          JSON.stringify({
+            jobs: [{ id: jobId, artifact_type: "linux-audit-log" }],
+            gate: null,
+          }),
           { status: 200 }
         );
       }
@@ -241,7 +259,10 @@ describe("runSingleCycle", () => {
       }
       if (url.includes("/api/agent/jobs/next")) {
         return new Response(
-          JSON.stringify({ jobs: [{ id: jobId }], gate: null }),
+          JSON.stringify({
+            jobs: [{ id: jobId, artifact_type: "linux-audit-log" }],
+            gate: null,
+          }),
           { status: 200 }
         );
       }
@@ -283,6 +304,98 @@ describe("runSingleCycle", () => {
       } catch {
         /* ignore */
       }
+    }
+  });
+
+  test("dispatches collection by artifact type and uploads artifact_type", async () => {
+    const jobId = "55555555-5555-5555-5555-555555555555";
+    const collectorsDir = await mkdtemp(join(tmpdir(), "sf-agent-collectors-"));
+    const scriptPath = join(collectorsDir, "collect-container-diagnostics.sh");
+    const producedPath = join(
+      collectorsDir,
+      "container_diagnostics_payments-api_20260326_101500.txt"
+    );
+    await writeFile(
+      scriptPath,
+      `#!/usr/bin/env bash
+cat > "${producedPath}" <<'EOF'
+=== container-diagnostics ===
+container_name: demo
+runtime: docker
+EOF
+`,
+      "utf8"
+    );
+
+    let seenArtifactType: string | null = null;
+    const fetchImpl: FetchLike = async (input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/agent/heartbeat") && method === "POST") {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/api/agent/jobs/next")) {
+        return new Response(
+          JSON.stringify({
+            jobs: [{ id: jobId, artifact_type: "container-diagnostics" }],
+            gate: null,
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/claim")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/start")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/artifact")) {
+        const form = init?.body as
+          | { get(name: string): FormDataEntryValue | null }
+          | undefined;
+        seenArtifactType = form?.get("artifact_type")?.toString() ?? null;
+        if (form == null) {
+          return new Response(JSON.stringify({ run_id: "run-1", artifact_id: "art-1" }), {
+            status: 200,
+          });
+        }
+        const file = form.get("file");
+        if (!(file instanceof File)) {
+          return new Response(JSON.stringify({ run_id: "run-1", artifact_id: "art-1" }), {
+            status: 200,
+          });
+        }
+        if (file.name !== "container_diagnostics_payments-api_20260326_101500.txt") {
+          return new Response(
+            JSON.stringify({ run_id: "run-1", artifact_id: "art-1" }),
+            { status: 200 }
+          );
+        }
+        return new Response(JSON.stringify({ run_id: "run-1", artifact_id: "art-1" }), {
+          status: 200,
+        });
+      }
+      if (url.includes("/fail")) {
+        return new Response("unexpected fail", { status: 500 });
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    const cfg = {
+      ...testConfig(),
+      collectorsDir,
+    };
+
+    try {
+      const r = await runSingleCycle(cfg, fetchImpl);
+      expect(r).toEqual({ kind: "processed", jobId });
+      if (seenArtifactType == null || seenArtifactType !== "container-diagnostics") {
+        throw new Error(`expected artifact_type container-diagnostics, got ${seenArtifactType}`);
+      }
+    } finally {
+      await unlink(scriptPath).catch(() => undefined);
+      await unlink(producedPath).catch(() => undefined);
+      await rm(collectorsDir, { recursive: true, force: true });
     }
   });
 });

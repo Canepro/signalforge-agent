@@ -5,10 +5,13 @@ import {
   type FetchLike,
   type SignalForgeAgentClient,
 } from "./api.ts";
-import { CollectorError, runFirstAuditScript } from "./collector.ts";
+import {
+  CollectorError,
+  isArtifactType,
+  runCollectorForArtifactType,
+  runFirstAuditScript,
+} from "./collector.ts";
 import { logError, logInfo, logWarn } from "./log.ts";
-
-const CAPABILITIES = ["collect:linux-audit-log", "upload:multipart"] as const;
 const LEASE_TTL_SECONDS = 300;
 const LEASE_FAIL_CODE = "lease_not_extended";
 
@@ -38,6 +41,19 @@ function leaseRejectDetail(hb: Record<string, unknown>): string | null {
   return code != null ? String(code) : null;
 }
 
+type QueuedJobSummary = {
+  id: string;
+  artifact_type: string;
+};
+
+function jobSummaryFromRow(row: unknown): QueuedJobSummary | null {
+  if (!row || typeof row !== "object") return null;
+  const id = (row as { id?: unknown }).id;
+  const artifactType = (row as { artifact_type?: unknown }).artifact_type;
+  if (typeof id !== "string" || typeof artifactType !== "string") return null;
+  return { id, artifact_type: artifactType };
+}
+
 /**
  * Heartbeat (idle) + jobs/next. Does not claim.
  */
@@ -47,7 +63,7 @@ export async function idleHeartbeatAndPoll(
   waitSeconds = 0
 ): Promise<IdleHeartbeatResult> {
   await client.heartbeat({
-    capabilities: [...CAPABILITIES],
+    capabilities: [...cfg.capabilities],
     attributes: { agent: "signalforge-agent", runtime: "bun" },
     agent_version: cfg.agentVersion,
     active_job_id: null,
@@ -57,19 +73,13 @@ export async function idleHeartbeatAndPoll(
   return { gate, jobs };
 }
 
-function jobIdFromSummary(row: unknown): string | null {
-  if (!row || typeof row !== "object") return null;
-  const id = (row as { id?: unknown }).id;
-  return typeof id === "string" ? id : null;
-}
-
 function midJobHeartbeatBody(
   cfg: AgentConfig,
   jobId: string,
   instanceId: string
 ) {
   return {
-    capabilities: [...CAPABILITIES],
+    capabilities: [...cfg.capabilities],
     attributes: { agent: "signalforge-agent", runtime: "bun" },
     agent_version: cfg.agentVersion,
     active_job_id: jobId,
@@ -83,7 +93,8 @@ function midJobHeartbeatBody(
 export async function processOneQueuedJob(
   client: SignalForgeAgentClient,
   cfg: AgentConfig,
-  jobId: string
+  jobId: string,
+  artifactType: string
 ): Promise<ProcessJobResult> {
   const { instanceId } = cfg;
 
@@ -169,6 +180,10 @@ export async function processOneQueuedJob(
       })();
     }, cfg.leaseHeartbeatMs);
 
+    if (!isArtifactType(artifactType)) {
+      throw new CollectorError(`unsupported artifact_type: ${artifactType}`);
+    }
+
     let artifactPath: string;
     let uploadName: string;
 
@@ -177,11 +192,14 @@ export async function processOneQueuedJob(
       uploadName = artifactPath.split(/[/\\]/).pop() || "artifact.log";
       logInfo(`using artifact override file: ${artifactPath}`);
     } else {
-      artifactPath = await runFirstAuditScript(cfg.collectorsDir, {
-        signal: leaseAbort.signal,
-      });
-      uploadName = artifactPath.split(/[/\\]/).pop() || "audit.log";
-      logInfo(`collector produced: ${artifactPath}`);
+      artifactPath =
+        artifactType === "linux-audit-log" ?
+          await runFirstAuditScript(cfg.collectorsDir, { signal: leaseAbort.signal })
+        : await runCollectorForArtifactType(cfg.collectorsDir, artifactType, {
+            signal: leaseAbort.signal,
+          });
+      uploadName = artifactPath.split(/[/\\]/).pop() || "artifact.log";
+      logInfo(`collector produced for ${artifactType}: ${artifactPath}`);
     }
 
     if (leaseNotExtended) {
@@ -197,7 +215,13 @@ export async function processOneQueuedJob(
 
     let upload: Record<string, unknown>;
     try {
-      upload = await client.uploadArtifact(jobId, instanceId, artifactPath, uploadName);
+      upload = await client.uploadArtifact(
+        jobId,
+        instanceId,
+        artifactType,
+        artifactPath,
+        uploadName
+      );
     } catch (up) {
       if (
         up instanceof ApiError &&
@@ -277,10 +301,14 @@ export async function runSingleCycle(
     return { kind: "noop", reason: "no_job", gate };
   }
 
-  const id = jobIdFromSummary(jobs[0]);
-  if (!id) {
-    return { kind: "error", code: 4, message: "jobs/next returned a row without id" };
+  const job = jobSummaryFromRow(jobs[0]);
+  if (!job) {
+    return {
+      kind: "error",
+      code: 4,
+      message: "jobs/next returned a row without id or artifact_type",
+    };
   }
 
-  return processOneQueuedJob(client, cfg, id);
+  return processOneQueuedJob(client, cfg, job.id, job.artifact_type);
 }
