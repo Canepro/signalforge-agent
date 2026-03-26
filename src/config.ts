@@ -1,14 +1,16 @@
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 export interface AgentConfig {
   baseUrl: string;
   agentToken: string;
   instanceId: string;
   collectorsDir: string;
+  capabilities: string[];
   pollIntervalMs: number;
   /** Bounded long-poll duration for jobs/next while running continuously (default 20s) */
   jobsWaitSeconds: number;
-  /** When set, upload this file instead of running first-audit.sh */
+  /** When set, upload this file instead of running a collector script */
   artifactFileOverride: string | null;
   agentVersion: string;
   /** Mid-job lease heartbeats while collecting/uploading (default 45s) */
@@ -31,6 +33,53 @@ const DEFAULT_POLL_MS = 30_000;
 const DEFAULT_JOBS_WAIT_SECONDS = 20;
 const DEFAULT_LEASE_HEARTBEAT_MS = 45_000;
 const DEFAULT_AGENT_VERSION = "0.1.0";
+
+function hasExecutableOnPath(name: string): boolean {
+  return Bun.which(name) != null;
+}
+
+function collectorsScriptExists(collectorsDir: string, script: string): boolean {
+  return existsSync(join(collectorsDir, script));
+}
+
+function defaultCapabilitiesForEnvironment(
+  collectorsDir: string,
+  artifactFileOverride: string | null
+): string[] {
+  if (artifactFileOverride) {
+    return ["upload:multipart"];
+  }
+
+  const capabilities: string[] = [];
+
+  if (collectorsScriptExists(collectorsDir, "first-audit.sh")) {
+    capabilities.push("collect:linux-audit-log");
+  }
+
+  const containerRef = process.env.SIGNALFORGE_CONTAINER_REF?.trim();
+  if (
+    containerRef &&
+    collectorsScriptExists(collectorsDir, "collect-container-diagnostics.sh") &&
+    (hasExecutableOnPath("podman") || hasExecutableOnPath("docker"))
+  ) {
+    capabilities.push("collect:container-diagnostics");
+  }
+
+  if (
+    collectorsScriptExists(collectorsDir, "collect-kubernetes-bundle.sh") &&
+    hasExecutableOnPath(process.env.SIGNALFORGE_KUBECTL_BIN?.trim() || "kubectl")
+  ) {
+    capabilities.push("collect:kubernetes-bundle");
+  }
+
+  capabilities.push("upload:multipart");
+  return capabilities;
+}
+
+function parseCapabilityList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return [...new Set(raw.split(",").map((part) => part.trim()).filter(Boolean))];
+}
 
 /**
  * Load config from environment. Uses SIGNALFORGE_URL or SIGNALFORGE_BASE_URL.
@@ -80,6 +129,15 @@ export function loadConfig(): AgentConfig {
   const agentVersion =
     process.env.SIGNALFORGE_AGENT_VERSION?.trim() || DEFAULT_AGENT_VERSION;
 
+  const capabilitiesRaw = process.env.SIGNALFORGE_AGENT_CAPABILITIES?.trim();
+  const capabilities =
+    capabilitiesRaw ?
+      parseCapabilityList(capabilitiesRaw)
+    : defaultCapabilitiesForEnvironment(collectorsDir, override);
+  if (capabilities.length === 0) {
+    throw new ConfigError("SIGNALFORGE_AGENT_CAPABILITIES must not be empty");
+  }
+
   const leaseRaw = process.env.SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS?.trim();
   let leaseHeartbeatMs = DEFAULT_LEASE_HEARTBEAT_MS;
   if (leaseRaw) {
@@ -97,6 +155,7 @@ export function loadConfig(): AgentConfig {
     agentToken,
     instanceId,
     collectorsDir,
+    capabilities,
     pollIntervalMs,
     jobsWaitSeconds,
     artifactFileOverride: override ? resolve(override) : null,

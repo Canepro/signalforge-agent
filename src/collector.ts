@@ -5,12 +5,48 @@ export class CollectorError extends Error {
   override readonly name = "CollectorError";
 }
 
-const AUDIT_LOG_RE = /^server_audit_\d{8}_\d{6}\.log$/;
+export type ArtifactType =
+  | "linux-audit-log"
+  | "container-diagnostics"
+  | "kubernetes-bundle";
+
+type CollectorSpec = {
+  script: string;
+  producedFileRe: RegExp;
+  artifactType: ArtifactType;
+};
+
+const COLLECTOR_SPECS: Record<ArtifactType, CollectorSpec> = {
+  "linux-audit-log": {
+    script: "first-audit.sh",
+    producedFileRe: /^server_audit_\d{8}_\d{6}\.log$/,
+    artifactType: "linux-audit-log",
+  },
+  "container-diagnostics": {
+    script: "collect-container-diagnostics.sh",
+    producedFileRe:
+      /^container[-_]diagnostics(?:_[a-z0-9._-]+)?_\d{8}_\d{6}\.(?:txt|log|json)$/,
+    artifactType: "container-diagnostics",
+  },
+  "kubernetes-bundle": {
+    script: "collect-kubernetes-bundle.sh",
+    producedFileRe:
+      /^kubernetes[-_]bundle(?:_[a-z0-9._-]+)?_\d{8}_\d{6}\.json$/,
+    artifactType: "kubernetes-bundle",
+  },
+};
+
+export function isArtifactType(value: string): value is ArtifactType {
+  return value in COLLECTOR_SPECS;
+}
 
 /**
  * Basename → mtimeMs for existing audit logs before a collector run.
  */
-export async function snapshotAuditLogs(dir: string): Promise<Map<string, number>> {
+export async function snapshotMatchingFiles(
+  dir: string,
+  fileRe: RegExp
+): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   let names: string[];
   try {
@@ -19,7 +55,7 @@ export async function snapshotAuditLogs(dir: string): Promise<Map<string, number
     return map;
   }
   for (const name of names) {
-    if (!AUDIT_LOG_RE.test(name)) continue;
+    if (!fileRe.test(name)) continue;
     const path = join(dir, name);
     try {
       const st = await stat(path);
@@ -31,12 +67,17 @@ export async function snapshotAuditLogs(dir: string): Promise<Map<string, number
   return map;
 }
 
+export async function snapshotAuditLogs(dir: string): Promise<Map<string, number>> {
+  return snapshotMatchingFiles(dir, COLLECTOR_SPECS["linux-audit-log"].producedFileRe);
+}
+
 /**
  * After a collector run: newest matching log that is new or has a strictly newer mtime than before.
  */
-export async function pickProducedAuditLog(
+export async function pickProducedMatchingFile(
   dir: string,
-  before: Map<string, number>
+  before: Map<string, number>,
+  fileRe: RegExp
 ): Promise<string | null> {
   let names: string[];
   try {
@@ -46,7 +87,7 @@ export async function pickProducedAuditLog(
   }
   let best: { path: string; mtime: number } | null = null;
   for (const name of names) {
-    if (!AUDIT_LOG_RE.test(name)) continue;
+    if (!fileRe.test(name)) continue;
     const path = join(dir, name);
     try {
       const st = await stat(path);
@@ -64,16 +105,29 @@ export async function pickProducedAuditLog(
   return best?.path ?? null;
 }
 
-/**
- * Run `first-audit.sh` from signalforge-collectors root (cwd).
- * Returns path to a log file that was **created or updated** by this run (not a stale prior file).
- */
-export async function runFirstAuditScript(
+export async function pickProducedAuditLog(
+  dir: string,
+  before: Map<string, number>
+): Promise<string | null> {
+  return pickProducedMatchingFile(
+    dir,
+    before,
+    COLLECTOR_SPECS["linux-audit-log"].producedFileRe
+  );
+}
+
+function collectorSpecForArtifactType(artifactType: ArtifactType): CollectorSpec {
+  return COLLECTOR_SPECS[artifactType];
+}
+
+async function runCollectorScript(
   collectorsDir: string,
+  artifactType: ArtifactType,
   options?: { signal?: AbortSignal }
 ): Promise<string> {
-  const before = await snapshotAuditLogs(collectorsDir);
-  const proc = Bun.spawn(["bash", "first-audit.sh"], {
+  const spec = collectorSpecForArtifactType(artifactType);
+  const before = await snapshotMatchingFiles(collectorsDir, spec.producedFileRe);
+  const proc = Bun.spawn(["bash", spec.script], {
     cwd: collectorsDir,
     stdout: "inherit",
     stderr: "inherit",
@@ -85,19 +139,50 @@ export async function runFirstAuditScript(
     code = await proc.exited;
   } catch (e) {
     if (options?.signal?.aborted) {
-      throw new CollectorError("first-audit.sh aborted (lease lost or shutdown)");
+      throw new CollectorError(`${spec.script} aborted (lease lost or shutdown)`);
     }
     throw e instanceof Error ? e : new CollectorError(String(e));
   }
   if (code !== 0) {
-    throw new CollectorError(`first-audit.sh exited with code ${code}`);
+    throw new CollectorError(`${spec.script} exited with code ${code}`);
   }
 
-  const logPath = await pickProducedAuditLog(collectorsDir, before);
-  if (!logPath) {
+  const produced = await pickProducedMatchingFile(
+    collectorsDir,
+    before,
+    spec.producedFileRe
+  );
+  if (!produced) {
     throw new CollectorError(
-      "first-audit.sh exited 0 but no new or updated server_audit_YYYYMMDD_HHMMSS.log was detected (refusing to upload a stale log)"
+      `${spec.script} exited 0 but no new or updated matching artifact was detected (refusing to upload a stale file)`
     );
   }
-  return logPath;
+  return produced;
+}
+
+/**
+ * Run `first-audit.sh` from signalforge-collectors root (cwd).
+ * Returns path to a log file that was **created or updated** by this run (not a stale prior file).
+ */
+export async function runFirstAuditScript(
+  collectorsDir: string,
+  options?: { signal?: AbortSignal }
+): Promise<string> {
+  return runCollectorScript(collectorsDir, "linux-audit-log", options);
+}
+
+export function collectorSpecForArtifact(artifactType: ArtifactType): {
+  script: string;
+  producedFileRe: RegExp;
+} {
+  const { script, producedFileRe } = collectorSpecForArtifactType(artifactType);
+  return { script, producedFileRe };
+}
+
+export async function runCollectorForArtifactType(
+  collectorsDir: string,
+  artifactType: ArtifactType,
+  options?: { signal?: AbortSignal }
+): Promise<string> {
+  return runCollectorScript(collectorsDir, artifactType, options);
 }
