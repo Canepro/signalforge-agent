@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 
 export interface AgentConfig {
   baseUrl: string;
@@ -35,7 +35,12 @@ const DEFAULT_LEASE_HEARTBEAT_MS = 45_000;
 const DEFAULT_AGENT_VERSION = "0.1.0";
 
 function hasExecutableOnPath(name: string): boolean {
-  return Bun.which(name) != null;
+  const pathValue = process.env.PATH ?? "";
+  for (const dir of pathValue.split(delimiter)) {
+    if (!dir) continue;
+    if (existsSync(join(dir, name))) return true;
+  }
+  return false;
 }
 
 function collectorsScriptExists(collectorsDir: string, script: string): boolean {
@@ -56,9 +61,7 @@ function defaultCapabilitiesForEnvironment(
     capabilities.push("collect:linux-audit-log");
   }
 
-  const containerRef = process.env.SIGNALFORGE_CONTAINER_REF?.trim();
   if (
-    containerRef &&
     collectorsScriptExists(collectorsDir, "collect-container-diagnostics.sh") &&
     (hasExecutableOnPath("podman") || hasExecutableOnPath("docker"))
   ) {

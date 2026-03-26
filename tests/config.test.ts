@@ -16,7 +16,6 @@ const KEYS = [
   "SIGNALFORGE_AGENT_VERSION",
   "SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS",
   "SIGNALFORGE_AGENT_CAPABILITIES",
-  "SIGNALFORGE_CONTAINER_REF",
   "SIGNALFORGE_KUBECTL_BIN",
 ] as const;
 
@@ -100,12 +99,11 @@ describe("loadConfig", () => {
     await writeExecutable(join(binDir, "podman"));
     await writeExecutable(join(binDir, "kubectl"));
 
-    process.env.PATH = `${binDir}:${ORIGINAL_PATH}`;
+    process.env.PATH = binDir;
     process.env.SIGNALFORGE_URL = "http://x";
     process.env.SIGNALFORGE_AGENT_TOKEN = "t";
     process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
     process.env.SIGNALFORGE_COLLECTORS_DIR = collectorsDir;
-    process.env.SIGNALFORGE_CONTAINER_REF = "payments-api";
 
     expect(loadConfig().capabilities).toEqual([
       "collect:linux-audit-log",
@@ -115,16 +113,15 @@ describe("loadConfig", () => {
     ]);
   });
 
-  test("does not advertise container collection without a target container ref", async () => {
+  test("does not advertise container collection without a runtime binary", async () => {
     const collectorsDir = await makeTempDir("sf-agent-collectors-");
     const binDir = await makeTempDir("sf-agent-bin-");
     await writeExecutable(join(collectorsDir, "first-audit.sh"));
     await writeExecutable(join(collectorsDir, "collect-container-diagnostics.sh"));
     await writeExecutable(join(collectorsDir, "collect-kubernetes-bundle.sh"));
-    await writeExecutable(join(binDir, "podman"));
     await writeExecutable(join(binDir, "kubectl"));
 
-    process.env.PATH = `${binDir}:${ORIGINAL_PATH}`;
+    process.env.PATH = binDir;
     process.env.SIGNALFORGE_URL = "http://x";
     process.env.SIGNALFORGE_AGENT_TOKEN = "t";
     process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";

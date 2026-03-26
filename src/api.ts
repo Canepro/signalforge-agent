@@ -2,6 +2,7 @@
  * SignalForge agent HTTP client (source-bound Bearer).
  * `fetchImpl` is injectable for tests.
  */
+import { parseCollectionScope, type CollectionScope } from "./collection-scope.ts";
 
 export class ApiError extends Error {
   readonly method: string;
@@ -54,6 +55,12 @@ export type FetchLike = (
   input: RequestInfo | URL,
   init?: RequestInit
 ) => Promise<Response>;
+
+export type AgentJobSummary = {
+  id: string;
+  artifact_type: string;
+  collection_scope: CollectionScope | null;
+};
 
 export class SignalForgeAgentClient {
   constructor(
@@ -114,12 +121,25 @@ export class SignalForgeAgentClient {
   async jobsNext(
     limit: number,
     waitSeconds = 0
-  ): Promise<{ jobs: unknown[]; gate: string | null }> {
+  ): Promise<{ jobs: AgentJobSummary[]; gate: string | null }> {
     const data = (await this.requestJson(
       "GET",
       `/api/agent/jobs/next?limit=${encodeURIComponent(String(limit))}&wait_seconds=${encodeURIComponent(String(waitSeconds))}`
     )) as Record<string, unknown>;
-    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    const jobs = Array.isArray(data.jobs) ?
+        data.jobs.flatMap((job) => {
+          if (!job || typeof job !== "object") return [];
+          const row = job as Record<string, unknown>;
+          if (typeof row.id !== "string" || typeof row.artifact_type !== "string") return [];
+          return [
+            {
+              id: row.id,
+              artifact_type: row.artifact_type,
+              collection_scope: parseCollectionScope(row.collection_scope),
+            } satisfies AgentJobSummary,
+          ];
+        })
+      : [];
     const gate = data.gate == null || data.gate === null ? null : String(data.gate);
     return { jobs, gate };
   }

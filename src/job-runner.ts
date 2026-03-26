@@ -2,6 +2,7 @@ import type { AgentConfig } from "./config.ts";
 import {
   ApiError,
   createClient,
+  type AgentJobSummary,
   type FetchLike,
   type SignalForgeAgentClient,
 } from "./api.ts";
@@ -17,7 +18,7 @@ const LEASE_FAIL_CODE = "lease_not_extended";
 
 export type IdleHeartbeatResult = {
   gate: string | null;
-  jobs: unknown[];
+  jobs: AgentJobSummary[];
 };
 
 export type ProcessJobResult =
@@ -39,19 +40,6 @@ function leaseRejectDetail(hb: Record<string, unknown>): string | null {
   if (!lease || typeof lease !== "object") return null;
   const code = (lease as Record<string, unknown>).code;
   return code != null ? String(code) : null;
-}
-
-type QueuedJobSummary = {
-  id: string;
-  artifact_type: string;
-};
-
-function jobSummaryFromRow(row: unknown): QueuedJobSummary | null {
-  if (!row || typeof row !== "object") return null;
-  const id = (row as { id?: unknown }).id;
-  const artifactType = (row as { artifact_type?: unknown }).artifact_type;
-  if (typeof id !== "string" || typeof artifactType !== "string") return null;
-  return { id, artifact_type: artifactType };
 }
 
 /**
@@ -94,7 +82,8 @@ export async function processOneQueuedJob(
   client: SignalForgeAgentClient,
   cfg: AgentConfig,
   jobId: string,
-  artifactType: string
+  artifactType: string,
+  collectionScope: AgentJobSummary["collection_scope"]
 ): Promise<ProcessJobResult> {
   const { instanceId } = cfg;
 
@@ -195,9 +184,14 @@ export async function processOneQueuedJob(
       artifactPath =
         artifactType === "linux-audit-log" ?
           await runFirstAuditScript(cfg.collectorsDir, { signal: leaseAbort.signal })
-        : await runCollectorForArtifactType(cfg.collectorsDir, artifactType, {
-            signal: leaseAbort.signal,
-          });
+        : await runCollectorForArtifactType(
+            cfg.collectorsDir,
+            artifactType,
+            collectionScope,
+            {
+              signal: leaseAbort.signal,
+            }
+          );
       uploadName = artifactPath.split(/[/\\]/).pop() || "artifact.log";
       logInfo(`collector produced for ${artifactType}: ${artifactPath}`);
     }
@@ -301,14 +295,12 @@ export async function runSingleCycle(
     return { kind: "noop", reason: "no_job", gate };
   }
 
-  const job = jobSummaryFromRow(jobs[0]);
-  if (!job) {
-    return {
-      kind: "error",
-      code: 4,
-      message: "jobs/next returned a row without id or artifact_type",
-    };
-  }
-
-  return processOneQueuedJob(client, cfg, job.id, job.artifact_type);
+  const job = jobs[0];
+  return processOneQueuedJob(
+    client,
+    cfg,
+    job.id,
+    job.artifact_type,
+    job.collection_scope
+  );
 }

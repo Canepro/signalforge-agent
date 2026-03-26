@@ -1,84 +1,79 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  collectorSpecForArtifact,
-  pickProducedMatchingFile,
-  pickProducedAuditLog,
-  snapshotMatchingFiles,
-  snapshotAuditLogs,
-} from "../src/collector.ts";
+import { runCollectorForArtifactType } from "../src/collector.ts";
 
-describe("pickProducedAuditLog", () => {
-  let dir: string | undefined;
+const tempDirs: string[] = [];
 
-  afterEach(async () => {
-    if (dir) {
-      await rm(dir, { recursive: true, force: true });
-      dir = undefined;
-    }
-  });
-
-  test("returns null when no new or updated log", async () => {
-    dir = await mkdtemp(join(tmpdir(), "sf-agent-col-"));
-    const stale = join(dir, "server_audit_20200101_120000.log");
-    await writeFile(stale, "old\n", "utf8");
-    const before = await snapshotAuditLogs(dir);
-    expect(await pickProducedAuditLog(dir, before)).toBeNull();
-  });
-
-  test("prefers a newly created log file", async () => {
-    dir = await mkdtemp(join(tmpdir(), "sf-agent-col-"));
-    const stale = join(dir, "server_audit_20200101_120000.log");
-    await writeFile(stale, "old\n", "utf8");
-    const before = await snapshotAuditLogs(dir);
-    const fresh = join(dir, "server_audit_20990101_120000.log");
-    await writeFile(fresh, "new\n", "utf8");
-    const picked = await pickProducedAuditLog(dir, before);
-    expect(picked).toBe(fresh);
-  });
-
-  test("accepts an in-place mtime update of an existing log", async () => {
-    dir = await mkdtemp(join(tmpdir(), "sf-agent-col-"));
-    const name = "server_audit_20200202_120000.log";
-    const path = join(dir, name);
-    await writeFile(path, "v1\n", "utf8");
-    const before = await snapshotAuditLogs(dir);
-    await new Promise((r) => setTimeout(r, 50));
-    await writeFile(path, "v2\n", "utf8");
-    const picked = await pickProducedAuditLog(dir, before);
-    expect(picked).toBe(path);
-  });
+afterEach(async () => {
+  for (const dir of tempDirs) {
+    await rm(dir, { recursive: true, force: true });
+  }
+  tempDirs.length = 0;
 });
 
-describe("artifact-family matching", () => {
-  let dir: string | undefined;
+async function makeTempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
-  afterEach(async () => {
-    if (dir) {
-      await rm(dir, { recursive: true, force: true });
-      dir = undefined;
-    }
+async function writeExecutable(path: string, content: string): Promise<void> {
+  await writeFile(path, content, "utf8");
+  await chmod(path, 0o755);
+}
+
+describe("runCollectorForArtifactType", () => {
+  test("passes explicit container scope as collector flags", async () => {
+    const dir = await makeTempDir("sf-agent-collector-");
+    const capturePath = join(dir, "args.txt");
+    await writeExecutable(
+      join(dir, "collect-container-diagnostics.sh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" > '${capturePath}'
+printf 'ok\n' > ./container_diagnostics_payments-api_20260326_220000.txt
+`
+    );
+
+    const artifact = await runCollectorForArtifactType(dir, "container-diagnostics", {
+      kind: "container_target",
+      container_ref: "payments-api",
+      runtime: "podman",
+      host_hint: "runtime-a",
+    });
+
+    expect(artifact).toContain("container_diagnostics_payments-api_20260326_220000.txt");
+    expect(await readFile(capturePath, "utf8")).toContain(
+      "--container payments-api --runtime podman --hostname runtime-a"
+    );
   });
 
-  test("accepts collector-style container artifact names with target suffixes", async () => {
-    dir = await mkdtemp(join(tmpdir(), "sf-agent-col-"));
-    const { producedFileRe } = collectorSpecForArtifact("container-diagnostics");
-    const before = await snapshotMatchingFiles(dir, producedFileRe);
-    const fresh = join(dir, "container_diagnostics_payments-api_20990101_120000.txt");
-    await writeFile(fresh, "container\n", "utf8");
-    const picked = await pickProducedMatchingFile(dir, before, producedFileRe);
-    expect(picked).toBe(fresh);
-  });
+  test("passes explicit kubernetes scope as collector flags", async () => {
+    const dir = await makeTempDir("sf-agent-k8s-collector-");
+    const capturePath = join(dir, "args.txt");
+    await writeExecutable(
+      join(dir, "collect-kubernetes-bundle.sh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" > '${capturePath}'
+printf '{}\n' > ./kubernetes_bundle_payments_20260326_220000.json
+`
+    );
 
-  test("accepts collector-style kubernetes bundle names with scope suffixes", async () => {
-    dir = await mkdtemp(join(tmpdir(), "sf-agent-col-"));
-    const { producedFileRe } = collectorSpecForArtifact("kubernetes-bundle");
-    const before = await snapshotMatchingFiles(dir, producedFileRe);
-    const fresh = join(dir, "kubernetes_bundle_payments_20990101_120000.json");
-    await writeFile(fresh, "{}\n", "utf8");
-    const picked = await pickProducedMatchingFile(dir, before, producedFileRe);
-    expect(picked).toBe(fresh);
+    const artifact = await runCollectorForArtifactType(dir, "kubernetes-bundle", {
+      kind: "kubernetes_scope",
+      scope_level: "namespace",
+      namespace: "payments",
+      kubectl_context: "prod-eu-1",
+      cluster_name: "aks-prod-eu-1",
+      provider: "aks",
+    });
+
+    expect(artifact).toContain("kubernetes_bundle_payments_20260326_220000.json");
+    expect(await readFile(capturePath, "utf8")).toContain(
+      "--scope namespace --namespace payments --context prod-eu-1 --cluster-name aks-prod-eu-1 --provider aks"
+    );
   });
 });

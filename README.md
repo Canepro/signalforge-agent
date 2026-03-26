@@ -100,7 +100,7 @@ In **`run`** mode, **claim conflict (5)** is logged and the loop continues after
 5. **Agent** `POST /api/collection-jobs/{id}/claim` with `instance_id` + lease TTL.
 6. **Agent** `POST /api/collection-jobs/{id}/start` with `instance_id`.
 7. **Immediately** and on **`SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS`**, **agent** sends mid-job heartbeats with `active_job_id` + `instance_id`. If the response includes `active_job_lease.extended === false`, the agent **stops**: it aborts the running collector script, **does not upload**, and `POST …/fail` with code **`lease_not_extended`** so the job is not left ambiguously “running” on the client side.
-8. **Agent** dispatches by `job.artifact_type`: `linux-audit-log` runs **`bash first-audit.sh`**, `container-diagnostics` runs **`bash collect-container-diagnostics.sh`**, and `kubernetes-bundle` runs **`bash collect-kubernetes-bundle.sh`** from `SIGNALFORGE_COLLECTORS_DIR`, then requires a family-specific artifact that is new or has a newer mtime than before the run. Or it uses `SIGNALFORGE_AGENT_ARTIFACT_FILE`.
+8. **Agent** dispatches by `job.artifact_type`: `linux-audit-log` runs **`bash first-audit.sh`**, `container-diagnostics` runs **`bash collect-container-diagnostics.sh`**, and `kubernetes-bundle` runs **`bash collect-kubernetes-bundle.sh`** from `SIGNALFORGE_COLLECTORS_DIR`. When `jobs/next` includes typed `collection_scope`, the agent maps that scope to explicit collector flags. When scope is absent, it falls back to the collector's existing env/default behavior. The agent still requires a family-specific artifact that is new or has a newer mtime than before the run. Or it uses `SIGNALFORGE_AGENT_ARTIFACT_FILE`.
 9. **Another** mid-job heartbeat runs **immediately before** `POST …/artifact` to catch lease loss after a long collection.
 10. **Agent** `POST /api/collection-jobs/{id}/artifact` with multipart `file` + form fields `instance_id` and `artifact_type`.
 11. On collector or upload failure, **agent** `POST …/fail` with `instance_id`, `code` (`collector_failed`, `agent_failed`, or `lease_not_extended`), and `message`. stderr includes server error bodies when available.
@@ -112,12 +112,17 @@ Contract details: SignalForge [`plans/phase-6b-source-job-api-contract.md`](http
 - **No** audit logic lives in this repo.
 - The agent dispatches a fixed script per supported artifact family from **signalforge-collectors** and only accepts a fresh artifact from that family. It snapshots matching output files before the script and refuses stale files.
 - To change *how* evidence is gathered, edit **signalforge-collectors**, not this agent.
+- Preferred Phase 9 path:
+  - `container_target` scope maps to `collect-container-diagnostics.sh --container ... [--runtime ...] [--hostname ...]`
+  - `kubernetes_scope` maps to `collect-kubernetes-bundle.sh --scope ... [--namespace ...] [--context ...] [--cluster-name ...] [--provider ...]`
+  - `linux_host` needs no extra collector arguments
+- Legacy fallback remains available when `collection_scope` is missing, but it should not be the normal operator story.
 
 ## Limitations (v0.1)
 
 - One **source** per token; one **active job** at a time per process.
 - **Linux / WSL** host-agent slice by default, but the execution path now advertises and dispatches `linux-audit-log`, `container-diagnostics`, and `kubernetes-bundle` capabilities.
-- Container and Kubernetes jobs still depend on collector-side environment and access. For example, `collect-container-diagnostics.sh` needs a target container reference, and `collect-kubernetes-bundle.sh` needs a working `kubectl` context plus the intended scope. The current SignalForge job model does not yet send family-specific runtime parameters per job, so one agent process should only advertise those families when its local environment is deliberately prepared for them.
+- Container and Kubernetes jobs still depend on local runtime access. Phase 9 removes the need to pre-bake per-job target state into host env, but the host still must have the relevant runtime tools and permissions.
 - No realtime push/broker; bounded long-poll only.
 - No token rotation, notifications, or multi-source agents.
 

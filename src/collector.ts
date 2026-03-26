@@ -1,5 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import type { CollectionScope } from "./collection-scope.ts";
 
 export class CollectorError extends Error {
   override readonly name = "CollectorError";
@@ -123,11 +124,12 @@ function collectorSpecForArtifactType(artifactType: ArtifactType): CollectorSpec
 async function runCollectorScript(
   collectorsDir: string,
   artifactType: ArtifactType,
+  collectionScope: CollectionScope | null,
   options?: { signal?: AbortSignal }
 ): Promise<string> {
   const spec = collectorSpecForArtifactType(artifactType);
   const before = await snapshotMatchingFiles(collectorsDir, spec.producedFileRe);
-  const proc = Bun.spawn(["bash", spec.script], {
+  const proc = Bun.spawn(collectorCommandForArtifactType(spec.script, artifactType, collectionScope), {
     cwd: collectorsDir,
     stdout: "inherit",
     stderr: "inherit",
@@ -168,7 +170,7 @@ export async function runFirstAuditScript(
   collectorsDir: string,
   options?: { signal?: AbortSignal }
 ): Promise<string> {
-  return runCollectorScript(collectorsDir, "linux-audit-log", options);
+  return runCollectorScript(collectorsDir, "linux-audit-log", null, options);
 }
 
 export function collectorSpecForArtifact(artifactType: ArtifactType): {
@@ -182,7 +184,61 @@ export function collectorSpecForArtifact(artifactType: ArtifactType): {
 export async function runCollectorForArtifactType(
   collectorsDir: string,
   artifactType: ArtifactType,
+  collectionScope: CollectionScope | null,
   options?: { signal?: AbortSignal }
 ): Promise<string> {
-  return runCollectorScript(collectorsDir, artifactType, options);
+  return runCollectorScript(collectorsDir, artifactType, collectionScope, options);
+}
+
+function collectorCommandForArtifactType(
+  script: string,
+  artifactType: ArtifactType,
+  collectionScope: CollectionScope | null
+): string[] {
+  const cmd = ["bash", script];
+
+  if (artifactType === "linux-audit-log") {
+    if (collectionScope && collectionScope.kind !== "linux_host") {
+      throw new CollectorError("linux-audit-log jobs require collection_scope.kind=linux_host");
+    }
+    return cmd;
+  }
+
+  if (artifactType === "container-diagnostics") {
+    if (!collectionScope) return cmd;
+    if (collectionScope.kind !== "container_target") {
+      throw new CollectorError(
+        "container-diagnostics jobs require collection_scope.kind=container_target"
+      );
+    }
+    cmd.push("--container", collectionScope.container_ref);
+    if (collectionScope.runtime) {
+      cmd.push("--runtime", collectionScope.runtime);
+    }
+    if (collectionScope.host_hint) {
+      cmd.push("--hostname", collectionScope.host_hint);
+    }
+    return cmd;
+  }
+
+  if (!collectionScope) return cmd;
+  if (collectionScope.kind !== "kubernetes_scope") {
+    throw new CollectorError(
+      "kubernetes-bundle jobs require collection_scope.kind=kubernetes_scope"
+    );
+  }
+  cmd.push("--scope", collectionScope.scope_level);
+  if (collectionScope.namespace) {
+    cmd.push("--namespace", collectionScope.namespace);
+  }
+  if (collectionScope.kubectl_context) {
+    cmd.push("--context", collectionScope.kubectl_context);
+  }
+  if (collectionScope.cluster_name) {
+    cmd.push("--cluster-name", collectionScope.cluster_name);
+  }
+  if (collectionScope.provider) {
+    cmd.push("--provider", collectionScope.provider);
+  }
+  return cmd;
 }
