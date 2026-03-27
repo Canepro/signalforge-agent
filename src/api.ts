@@ -58,7 +58,20 @@ export function isRetryableApiFailure(error: unknown): boolean {
   if (error instanceof ApiError) {
     return RETRYABLE_HTTP_STATUSES.has(error.status);
   }
-  return error instanceof Error;
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    error.name === "TypeError" ||
+    "cause" in error ||
+    message.includes("fetch failed") ||
+    message.includes("network") ||
+    message.includes("timed out") ||
+    message.includes("timeout") ||
+    message.includes("econnreset") ||
+    message.includes("enotfound") ||
+    message.includes("eai_again") ||
+    message.includes("socket hang up")
+  );
 }
 
 export type FetchLike = (
@@ -136,20 +149,23 @@ export class SignalForgeAgentClient {
       "GET",
       `/api/agent/jobs/next?limit=${encodeURIComponent(String(limit))}&wait_seconds=${encodeURIComponent(String(waitSeconds))}`
     )) as Record<string, unknown>;
-    const jobs = Array.isArray(data.jobs) ?
-        data.jobs.flatMap((job) => {
-          if (!job || typeof job !== "object") return [];
-          const row = job as Record<string, unknown>;
-          if (typeof row.id !== "string" || typeof row.artifact_type !== "string") return [];
-          return [
-            {
-              id: row.id,
-              artifact_type: row.artifact_type,
-              collection_scope: parseCollectionScope(row.collection_scope),
-            } satisfies AgentJobSummary,
-          ];
-        })
-      : [];
+    if (!Array.isArray(data.jobs)) {
+      throw new Error("GET /api/agent/jobs/next returned an invalid jobs payload");
+    }
+    const jobs = data.jobs.map((job, index) => {
+      if (!job || typeof job !== "object") {
+        throw new Error(`GET /api/agent/jobs/next returned malformed job entry at index ${index}`);
+      }
+      const row = job as Record<string, unknown>;
+      if (typeof row.id !== "string" || typeof row.artifact_type !== "string") {
+        throw new Error(`GET /api/agent/jobs/next returned malformed job entry at index ${index}`);
+      }
+      return {
+        id: row.id,
+        artifact_type: row.artifact_type,
+        collection_scope: parseCollectionScope(row.collection_scope),
+      } satisfies AgentJobSummary;
+    });
     const gate = data.gate == null || data.gate === null ? null : String(data.gate);
     return { jobs, gate };
   }

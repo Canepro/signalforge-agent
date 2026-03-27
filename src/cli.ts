@@ -142,18 +142,15 @@ async function cmdRun(): Promise<number> {
       }
     }
     if (shouldSleep) {
-      const sleepMs =
-        retryable ?
-          nextRetryDelayMs(retryDelayMs, cfg.maxBackoffMs).sleepMs
-        : cfg.pollIntervalMs;
       if (retryable) {
         const next = nextRetryDelayMs(retryDelayMs, cfg.maxBackoffMs);
         logWarn(`retrying after ${next.sleepMs}ms (max ${cfg.maxBackoffMs}ms)`);
         retryDelayMs = next.nextDelayMs;
+        await sleep(next.sleepMs);
       } else {
         retryDelayMs = cfg.pollIntervalMs;
+        await sleep(cfg.pollIntervalMs);
       }
-      await sleep(sleepMs);
     }
   }
 }

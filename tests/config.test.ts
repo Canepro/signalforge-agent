@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -179,6 +179,47 @@ describe("loadConfig", () => {
     expect(loadConfig().capabilities).toEqual([
       "collect:linux-audit-log",
       "collect:kubernetes-bundle",
+      "upload:multipart",
+    ]);
+  });
+
+  test("does not treat non-executable PATH entries as runtimes", async () => {
+    const collectorsDir = await makeTempDir("sf-agent-collectors-");
+    const binDir = await makeTempDir("sf-agent-bin-");
+    await writeExecutable(join(collectorsDir, "first-audit.sh"));
+    await writeExecutable(join(collectorsDir, "collect-container-diagnostics.sh"));
+    await writeExecutable(join(collectorsDir, "collect-kubernetes-bundle.sh"));
+    await writeExecutable(join(binDir, "kubectl"));
+    await writeFile(join(binDir, "docker"), "not executable\n", "utf8");
+
+    process.env.PATH = binDir;
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = collectorsDir;
+
+    expect(loadConfig().capabilities).toEqual([
+      "collect:linux-audit-log",
+      "collect:kubernetes-bundle",
+      "upload:multipart",
+    ]);
+  });
+
+  test("does not treat directories as executables when checking kubectl", async () => {
+    const collectorsDir = await makeTempDir("sf-agent-collectors-");
+    const binDir = await makeTempDir("sf-agent-bin-");
+    await writeExecutable(join(collectorsDir, "first-audit.sh"));
+    await writeExecutable(join(collectorsDir, "collect-kubernetes-bundle.sh"));
+    await mkdir(join(binDir, "kubectl"));
+
+    process.env.PATH = binDir;
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = collectorsDir;
+
+    expect(loadConfig().capabilities).toEqual([
+      "collect:linux-audit-log",
       "upload:multipart",
     ]);
   });

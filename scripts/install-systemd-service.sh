@@ -110,6 +110,7 @@ done
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   STAGING_ROOT="$(mktemp -d)"
+  trap 'rm -rf "$STAGING_ROOT"' EXIT
   SERVICE_TARGET_PATH="${STAGING_ROOT}/etc/systemd/system/${SERVICE_NAME}.service"
   ENV_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}.env"
   TOKEN_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}/token"

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 
 export interface AgentConfig {
@@ -65,15 +65,28 @@ const RUNTIME_PROBE_TIMEOUT_MS = 1_500;
 function resolveExecutableOnPath(name: string): string | null {
   if (name.includes("/")) {
     const directPath = resolve(name);
-    return existsSync(directPath) ? directPath : null;
+    return isExecutableFile(directPath) ? directPath : null;
   }
   const pathValue = process.env.PATH ?? "";
   for (const dir of pathValue.split(delimiter)) {
     if (!dir) continue;
     const candidate = join(dir, name);
-    if (existsSync(candidate)) return candidate;
+    if (isExecutableFile(candidate)) return candidate;
   }
   return null;
+}
+
+function isExecutableFile(path: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    const stats = statSync(path);
+    if (!stats.isFile()) return false;
+    const mode = stats.mode & 0o111;
+    if (process.platform === "win32") return mode !== 0 || path.toLowerCase().endsWith(".exe");
+    return mode !== 0;
+  } catch {
+    return false;
+  }
 }
 
 function hasExecutableOnPath(name: string): boolean {
@@ -132,7 +145,6 @@ export function runtimeCapabilityChecksForEnvironment(
       enabled: hasContainerScript && hints.containerRuntime !== null,
       reason:
         !hasContainerScript ? "missing collect-container-diagnostics.sh in collectors dir"
-        : hints.containerRuntime ? hints.containerRuntimeReason
         : hints.containerRuntimeReason,
     },
     {
@@ -198,8 +210,11 @@ function probeContainerRuntime(runtime: "docker" | "podman"): {
   });
 
   if (result.error) {
+    const timeoutLike =
+      result.error.name === "TimeoutError" ||
+      (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
     const errorMessage =
-      result.error.name === "TimeoutError" ? "runtime probe timed out"
+      timeoutLike ? "runtime probe timed out"
       : result.error.message;
     return {
       ok: false,

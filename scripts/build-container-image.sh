@@ -20,6 +20,10 @@ fi
 
 BUILD_ROOT="$(mktemp -d)"
 trap 'rm -rf "$BUILD_ROOT"' EXIT
+AGENT_STAGE_DIR="$BUILD_ROOT/$(basename "$AGENT_DIR")"
+COLLECTORS_STAGE_DIR="$BUILD_ROOT/$(basename "$COLLECTORS_DIR")"
+
+mkdir -p "$AGENT_STAGE_DIR" "$COLLECTORS_STAGE_DIR"
 
 tar \
   --exclude=node_modules \
@@ -27,14 +31,27 @@ tar \
   --exclude=contrib/systemd/signalforge-agent.env \
   --exclude=contrib/systemd/signalforge-agent.token \
   --exclude=contrib/systemd/signalforge-agent.kubeconfig \
-  -C "$AGENT_DIR/.." \
+  --exclude=contrib/container/signalforge-agent.container.env \
+  --exclude=contrib/container/signalforge-agent.container.token \
+  --exclude=contrib/container/signalforge-agent.container.kubeconfig \
+  -C "$AGENT_DIR" \
   -cf - \
-  "$(basename "$AGENT_DIR")" \
-  "$(basename "$COLLECTORS_DIR")" \
-  | tar -C "$BUILD_ROOT" -xf -
+  . \
+  | tar -C "$AGENT_STAGE_DIR" -xf -
+
+tar \
+  --exclude=node_modules \
+  --exclude=.git \
+  --exclude='*.env' \
+  --exclude='*.token' \
+  --exclude='*.kubeconfig' \
+  -C "$COLLECTORS_DIR" \
+  -cf - \
+  . \
+  | tar -C "$COLLECTORS_STAGE_DIR" -xf -
 
 docker build \
-  -f "$BUILD_ROOT/$(basename "$AGENT_DIR")/contrib/container/Dockerfile" \
+  -f "$AGENT_STAGE_DIR/contrib/container/Dockerfile" \
   -t "$IMAGE_TAG" \
   "$BUILD_ROOT"
 
