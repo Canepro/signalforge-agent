@@ -490,7 +490,7 @@ printf '{}\n' > "${producedPath}"
       expect(
         seenLogs.some((line) =>
           line.includes(
-            "claimed job 66666666-6666-6666-6666-666666666666 artifact_type=kubernetes-bundle scope=kubernetes_scope(scope_level=namespace, namespace=payments, kubectl_context=prod-eu-1, cluster_name=aks-prod-eu-1, provider=aks)"
+            "claimed job 66666666-6666-6666-6666-666666666666 artifact_type=kubernetes-bundle scope=kubernetes_scope(scope_level=namespace,namespace=payments,kubectl_context=prod-eu-1,cluster_name=aks-prod-eu-1,provider=aks)"
           )
         )
       ).toBe(true);
