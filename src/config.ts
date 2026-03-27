@@ -10,6 +10,7 @@ export interface AgentConfig {
   collectorsDir: string;
   capabilities: string[];
   pollIntervalMs: number;
+  maxBackoffMs: number;
   /** Bounded long-poll duration for jobs/next while running continuously (default 20s) */
   jobsWaitSeconds: number;
   /** When set, upload this file instead of running a collector script */
@@ -32,6 +33,7 @@ export class ConfigError extends Error {
 }
 
 const DEFAULT_POLL_MS = 30_000;
+const DEFAULT_MAX_BACKOFF_MS = 300_000;
 const DEFAULT_JOBS_WAIT_SECONDS = 20;
 const DEFAULT_LEASE_HEARTBEAT_MS = 45_000;
 const DEFAULT_AGENT_VERSION = "0.1.0";
@@ -223,6 +225,21 @@ export function loadConfig(): AgentConfig {
     jobsWaitSeconds = n;
   }
 
+  const maxBackoffRaw = process.env.SIGNALFORGE_MAX_BACKOFF_MS?.trim();
+  let maxBackoffMs = DEFAULT_MAX_BACKOFF_MS;
+  if (maxBackoffRaw) {
+    const n = parseInt(maxBackoffRaw, 10);
+    if (Number.isNaN(n) || n < 1000) {
+      throw new ConfigError("SIGNALFORGE_MAX_BACKOFF_MS must be an integer >= 1000");
+    }
+    maxBackoffMs = n;
+  }
+  if (maxBackoffMs < pollIntervalMs) {
+    throw new ConfigError(
+      "SIGNALFORGE_MAX_BACKOFF_MS must be greater than or equal to SIGNALFORGE_POLL_INTERVAL_MS"
+    );
+  }
+
   const agentVersion =
     process.env.SIGNALFORGE_AGENT_VERSION?.trim() || DEFAULT_AGENT_VERSION;
 
@@ -256,6 +273,7 @@ export function loadConfig(): AgentConfig {
     collectorsDir,
     capabilities,
     pollIntervalMs,
+    maxBackoffMs,
     jobsWaitSeconds,
     artifactFileOverride: override ? resolve(override) : null,
     agentVersion,

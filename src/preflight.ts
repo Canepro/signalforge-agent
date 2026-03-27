@@ -17,6 +17,7 @@ export function buildPreflightLines(cfg: AgentConfig): string[] {
       `Artifact override: ${cfg.artifactFileOverride}`
     : `Collectors dir: ${cfg.collectorsDir}`
   );
+  lines.push(`Backoff: base ${cfg.pollIntervalMs}ms, max ${cfg.maxBackoffMs}ms`);
   lines.push(`Effective capabilities: ${cfg.capabilities.join(", ")}`);
 
   for (const check of runtimeCapabilityChecksForEnvironment(

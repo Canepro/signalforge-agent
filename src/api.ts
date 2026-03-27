@@ -42,6 +42,8 @@ export class AuthError extends ApiError {
   }
 }
 
+const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
 function parseJsonSafe(text: string): Record<string, unknown> | null {
   try {
     const v = JSON.parse(text) as unknown;
@@ -49,6 +51,14 @@ function parseJsonSafe(text: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+export function isRetryableApiFailure(error: unknown): boolean {
+  if (error instanceof AuthError) return false;
+  if (error instanceof ApiError) {
+    return RETRYABLE_HTTP_STATUSES.has(error.status);
+  }
+  return error instanceof Error;
 }
 
 export type FetchLike = (

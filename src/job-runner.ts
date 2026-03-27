@@ -2,6 +2,7 @@ import type { AgentConfig } from "./config.ts";
 import {
   ApiError,
   createClient,
+  isRetryableApiFailure,
   type AgentJobSummary,
   type FetchLike,
   type SignalForgeAgentClient,
@@ -24,7 +25,7 @@ export type IdleHeartbeatResult = {
 export type ProcessJobResult =
   | { kind: "processed"; jobId: string; runStatus?: string; analysisStatus?: string }
   | { kind: "noop"; reason: "no_job"; gate: string | null }
-  | { kind: "error"; code: number; message: string };
+  | { kind: "error"; code: number; message: string; retryable?: boolean };
 
 /**
  * Server rejected lease extension for the active job — stop work and do not upload.
@@ -92,9 +93,14 @@ export async function processOneQueuedJob(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (e instanceof ApiError && e.status === 409) {
-      return { kind: "error", code: 5, message: `claim conflict: ${msg}` };
+      return { kind: "error", code: 5, message: `claim conflict: ${msg}`, retryable: false };
     }
-    return { kind: "error", code: 4, message: `claim failed: ${msg}` };
+    return {
+      kind: "error",
+      code: 4,
+      message: `claim failed: ${msg}`,
+      retryable: isRetryableApiFailure(e),
+    };
   }
 
   logInfo(`claimed job ${jobId}`);
@@ -103,7 +109,12 @@ export async function processOneQueuedJob(
     await client.start(jobId, instanceId);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { kind: "error", code: 4, message: `start failed: ${msg}` };
+    return {
+      kind: "error",
+      code: 4,
+      message: `start failed: ${msg}`,
+      retryable: isRetryableApiFailure(e),
+    };
   }
 
   logInfo(`started job ${jobId}`);
@@ -270,6 +281,7 @@ export async function processOneQueuedJob(
       kind: "error",
       code: isCollector ? 3 : 4,
       message: msg,
+      retryable: !isCollector && isRetryableApiFailure(e),
     };
   } finally {
     stopLeaseTimer();

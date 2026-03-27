@@ -41,6 +41,7 @@ function testConfig(): AgentConfig {
       "upload:multipart",
     ],
     pollIntervalMs: 30_000,
+    maxBackoffMs: 300_000,
     jobsWaitSeconds: 20,
     artifactFileOverride: null,
     agentVersion: "0.1.0-test",

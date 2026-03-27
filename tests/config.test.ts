@@ -16,6 +16,7 @@ const KEYS = [
   "SIGNALFORGE_AGENT_INSTANCE_ID",
   "SIGNALFORGE_COLLECTORS_DIR",
   "SIGNALFORGE_POLL_INTERVAL_MS",
+  "SIGNALFORGE_MAX_BACKOFF_MS",
   "SIGNALFORGE_JOBS_WAIT_SECONDS",
   "SIGNALFORGE_AGENT_ARTIFACT_FILE",
   "SIGNALFORGE_AGENT_VERSION",
@@ -78,6 +79,7 @@ describe("loadConfig", () => {
     expect(c.baseUrl).toBe("http://localhost:3000");
     expect(c.artifactFileOverride).toContain("x.log");
     expect(c.leaseHeartbeatMs).toBe(45_000);
+    expect(c.maxBackoffMs).toBe(300_000);
     expect(c.capabilities).toEqual(["upload:multipart"]);
   });
 
@@ -194,6 +196,25 @@ describe("loadConfig", () => {
     process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
     process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
     process.env.SIGNALFORGE_POLL_INTERVAL_MS = "500";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("parses optional max backoff", () => {
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
+    process.env.SIGNALFORGE_MAX_BACKOFF_MS = "120000";
+    expect(loadConfig().maxBackoffMs).toBe(120_000);
+  });
+
+  test("rejects max backoff under poll interval", () => {
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
+    process.env.SIGNALFORGE_POLL_INTERVAL_MS = "30000";
+    process.env.SIGNALFORGE_MAX_BACKOFF_MS = "20000";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 });
