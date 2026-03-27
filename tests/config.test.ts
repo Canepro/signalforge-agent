@@ -151,13 +151,15 @@ describe("loadConfig", () => {
     process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
     process.env.SIGNALFORGE_COLLECTORS_DIR = collectorsDir;
 
-    expect(loadConfig().capabilities).toEqual([
+    const config = loadConfig();
+    expect(config.capabilities).toEqual([
       "collect:linux-audit-log",
       "collect:container-diagnostics",
       "collect:kubernetes-bundle",
       "upload:multipart",
     ]);
-    expect(loadConfig().containerRuntime).toBe("podman");
+    expect(config.containerRuntime).toBe("podman");
+    expect(config.containerRuntimeReason).toBe("podman runtime accessible");
   });
 
   test("does not advertise container collection without a runtime binary", async () => {
@@ -179,6 +181,34 @@ describe("loadConfig", () => {
       "collect:kubernetes-bundle",
       "upload:multipart",
     ]);
+  });
+
+  test("does not advertise container collection when runtime access fails", async () => {
+    const collectorsDir = await makeTempDir("sf-agent-collectors-");
+    const binDir = await makeTempDir("sf-agent-bin-");
+    await writeExecutable(join(collectorsDir, "first-audit.sh"));
+    await writeExecutable(join(collectorsDir, "collect-container-diagnostics.sh"));
+    const dockerPath = join(binDir, "docker");
+    await writeFile(
+      dockerPath,
+      "#!/bin/sh\necho 'permission denied while trying to connect to the Docker daemon socket' >&2\nexit 1\n",
+      "utf8"
+    );
+    await chmod(dockerPath, 0o755);
+
+    process.env.PATH = binDir;
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = collectorsDir;
+
+    const config = loadConfig();
+    expect(config.capabilities).toEqual([
+      "collect:linux-audit-log",
+      "upload:multipart",
+    ]);
+    expect(config.containerRuntime).toBeNull();
+    expect(config.containerRuntimeReason).toContain("permission denied");
   });
 
   test("parses optional lease heartbeat interval", () => {
@@ -261,6 +291,7 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         kubectlBin: "kubectl",
         kubeconfigPath: null,
         containerRuntime: null,
+        containerRuntimeReason: "missing container runtime binary on PATH (docker or podman)",
       })
     ).toEqual([
       {
@@ -296,6 +327,7 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         kubectlBin: "kubectl",
         kubeconfigPath,
         containerRuntime: null,
+        containerRuntimeReason: "missing container runtime binary on PATH (docker or podman)",
       })
     ).toEqual([
       {
@@ -312,6 +344,38 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         capability: "collect:kubernetes-bundle",
         enabled: true,
         reason: `kubectl binary found (kubectl); kubeconfig set (${kubeconfigPath})`,
+      },
+    ]);
+  });
+
+  test("reports inaccessible docker daemon in container readiness reason", async () => {
+    const collectorsDir = await makeTempDir("sf-agent-collectors-");
+    await writeExecutable(join(collectorsDir, "collect-container-diagnostics.sh"));
+
+    expect(
+      runtimeCapabilityChecksForEnvironment(collectorsDir, null, {
+        kubectlBin: "kubectl",
+        kubeconfigPath: null,
+        containerRuntime: null,
+        containerRuntimeReason:
+          "docker found but not usable: permission denied while trying to connect to the Docker daemon socket",
+      })
+    ).toEqual([
+      {
+        capability: "collect:linux-audit-log",
+        enabled: false,
+        reason: "missing first-audit.sh in collectors dir",
+      },
+      {
+        capability: "collect:container-diagnostics",
+        enabled: false,
+        reason:
+          "docker found but not usable: permission denied while trying to connect to the Docker daemon socket",
+      },
+      {
+        capability: "collect:kubernetes-bundle",
+        enabled: false,
+        reason: "missing collect-kubernetes-bundle.sh in collectors dir",
       },
     ]);
   });

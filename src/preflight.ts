@@ -17,7 +17,9 @@ export function buildPreflightLines(cfg: AgentConfig): string[] {
       `Artifact override: ${cfg.artifactFileOverride}`
     : `Collectors dir: ${cfg.collectorsDir}`
   );
-  lines.push(`Container runtime: ${cfg.containerRuntime ?? "not found"}`);
+  lines.push(
+    `Container runtime: ${cfg.containerRuntime ?? "not ready"} (${cfg.containerRuntimeReason})`
+  );
   lines.push(`Kubectl bin: ${cfg.kubectlBin}`);
   lines.push(
     `Kubeconfig: ${cfg.kubeconfigPath ?? "not set (ambient/default kubectl context)"}`
@@ -30,6 +32,7 @@ export function buildPreflightLines(cfg: AgentConfig): string[] {
     cfg.artifactFileOverride,
     {
       containerRuntime: cfg.containerRuntime,
+      containerRuntimeReason: cfg.containerRuntimeReason,
       kubectlBin: cfg.kubectlBin,
       kubeconfigPath: cfg.kubeconfigPath,
     }
@@ -45,7 +48,7 @@ export function buildPreflightLines(cfg: AgentConfig): string[] {
 export function runPreflight(args: string[] = []): number {
   const quiet = args.includes("--quiet");
   try {
-    const cfg = loadConfig();
+    const cfg = loadConfig({ probeRuntimeReadiness: true });
     if (!quiet) {
       console.log("SignalForge agent preflight");
       for (const line of buildPreflightLines(cfg)) {

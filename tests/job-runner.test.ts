@@ -35,6 +35,7 @@ function testConfig(): AgentConfig {
     instanceId: "test-instance",
     collectorsDir: "/tmp/collectors",
     containerRuntime: null,
+    containerRuntimeReason: "missing container runtime binary on PATH (docker or podman)",
     kubectlBin: "kubectl",
     kubeconfigPath: null,
     capabilities: [

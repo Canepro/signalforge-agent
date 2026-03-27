@@ -49,7 +49,7 @@ All configuration is **environment variables** (see `.env.example`).
 | `SIGNALFORGE_AGENT_TOKEN_FILE` | yes* | File containing the bearer token. Preferred for long-running services. |
 | `SIGNALFORGE_AGENT_INSTANCE_ID` | yes | Opaque stable id for **this process**; must match claim/start/fail/artifact and lease-extension heartbeats |
 | `SIGNALFORGE_COLLECTORS_DIR` | yes* | Absolute path to **signalforge-collectors** root (family-specific collector scripts live there) |
-| `SIGNALFORGE_AGENT_CAPABILITIES` | no | Comma-separated heartbeat capabilities. When omitted, the agent derives capabilities from local readiness and always includes `upload:multipart` |
+| `SIGNALFORGE_AGENT_CAPABILITIES` | no | Comma-separated heartbeat capabilities. When omitted, the agent derives capabilities from local readiness and always includes `upload:multipart`. Container capability now requires real Docker or Podman access, not only a binary on `PATH` |
 | `SIGNALFORGE_POLL_INTERVAL_MS` | no | Default `30000`; minimum `1000`; base sleep after gate paths and claim conflicts in `run` mode |
 | `SIGNALFORGE_MAX_BACKOFF_MS` | no | Default `300000`; minimum `1000`; ceiling for exponential backoff on transient network or 5xx/429 API failures in `run` mode |
 | `SIGNALFORGE_JOBS_WAIT_SECONDS` | no | Default `20`; max `20`; bounded long-poll window for `GET /api/agent/jobs/next` in `run` mode |
@@ -78,7 +78,7 @@ export SIGNALFORGE_AGENT_CAPABILITIES='collect:linux-audit-log,upload:multipart'
 |---------|----------|
 | `signalforge-agent once` | Idle heartbeat → poll **one** `GET /api/agent/jobs/next` → if a job exists, claim → start → collect → `POST …/artifact` → exit |
 | `signalforge-agent run` | Idle heartbeat → long-poll `GET /api/agent/jobs/next` → process work immediately when available; sleeps by `SIGNALFORGE_POLL_INTERVAL_MS` on gate paths and claim conflicts, and uses exponential backoff up to `SIGNALFORGE_MAX_BACKOFF_MS` on transient network or retryable upstream API failures |
-| `signalforge-agent preflight` | Validate config, token source, and locally runnable collector/runtime capabilities before enabling the service |
+| `signalforge-agent preflight` | Validate config, token source, and locally runnable collector/runtime capabilities before enabling the service. This includes actual Docker or Podman reachability for container-capable hosts |
 | `signalforge-agent help` | Usage and env summary |
 | `signalforge-agent version` | Print version |
 
@@ -193,7 +193,9 @@ Container diagnostics host:
 - use a dedicated runner host or the runtime host itself
 - grant only the runtime access you actually need, for example `docker` or `podman`
 - treat membership that can reach the container socket as elevated trust
-- use `signalforge-agent preflight` as the service user to confirm the runtime binary is actually visible before enabling the unit
+- use `signalforge-agent preflight` as the service user to confirm the runtime is actually usable before enabling the unit
+- for Docker, verify the service account can reach the daemon socket or equivalent rootless endpoint, not just the `docker` binary
+- for Podman, verify the service account can run `podman info` in the intended rootless or privileged mode
 
 Kubernetes diagnostics host:
 

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 
@@ -9,6 +10,7 @@ export interface AgentConfig {
   instanceId: string;
   collectorsDir: string;
   containerRuntime: "docker" | "podman" | null;
+  containerRuntimeReason: string;
   kubectlBin: string;
   kubeconfigPath: string | null;
   capabilities: string[];
@@ -51,15 +53,31 @@ export interface RuntimeEnvironmentHints {
   kubectlBin: string;
   kubeconfigPath: string | null;
   containerRuntime: "docker" | "podman" | null;
+  containerRuntimeReason: string;
 }
 
-function hasExecutableOnPath(name: string): boolean {
+interface RuntimeHintOptions {
+  probeContainerRuntime: boolean;
+}
+
+const RUNTIME_PROBE_TIMEOUT_MS = 1_500;
+
+function resolveExecutableOnPath(name: string): string | null {
+  if (name.includes("/")) {
+    const directPath = resolve(name);
+    return existsSync(directPath) ? directPath : null;
+  }
   const pathValue = process.env.PATH ?? "";
   for (const dir of pathValue.split(delimiter)) {
     if (!dir) continue;
-    if (existsSync(join(dir, name))) return true;
+    const candidate = join(dir, name);
+    if (existsSync(candidate)) return candidate;
   }
-  return false;
+  return null;
+}
+
+function hasExecutableOnPath(name: string): boolean {
+  return resolveExecutableOnPath(name) !== null;
 }
 
 function collectorsScriptExists(collectorsDir: string, script: string): boolean {
@@ -96,8 +114,6 @@ export function runtimeCapabilityChecksForEnvironment(
     collectorsDir,
     "collect-container-diagnostics.sh"
   );
-  const hasDocker = hasExecutableOnPath("docker");
-  const hasPodman = hasExecutableOnPath("podman");
   const hasKubernetesScript = collectorsScriptExists(
     collectorsDir,
     "collect-kubernetes-bundle.sh"
@@ -113,11 +129,11 @@ export function runtimeCapabilityChecksForEnvironment(
     },
     {
       capability: "collect:container-diagnostics",
-      enabled: hasContainerScript && (hasDocker || hasPodman),
+      enabled: hasContainerScript && hints.containerRuntime !== null,
       reason:
         !hasContainerScript ? "missing collect-container-diagnostics.sh in collectors dir"
-        : hints.containerRuntime ? `runtime binary found (${hints.containerRuntime})`
-        : "missing container runtime binary on PATH (docker or podman)",
+        : hints.containerRuntime ? hints.containerRuntimeReason
+        : hints.containerRuntimeReason,
     },
     {
       capability: "collect:kubernetes-bundle",
@@ -149,6 +165,60 @@ function defaultCapabilitiesForEnvironment(
 function parseCapabilityList(raw: string | undefined): string[] {
   if (!raw) return [];
   return [...new Set(raw.split(",").map((part) => part.trim()).filter(Boolean))];
+}
+
+function summarizeProbeFailure(output: string): string {
+  const firstLine = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine) return "no diagnostic output";
+  return firstLine.length > 160 ? `${firstLine.slice(0, 159)}…` : firstLine;
+}
+
+function probeContainerRuntime(runtime: "docker" | "podman"): {
+  ok: boolean;
+  reason: string;
+} {
+  const runtimePath = resolveExecutableOnPath(runtime);
+  if (!runtimePath) {
+    return {
+      ok: false,
+      reason: `missing ${runtime} binary on PATH`,
+    };
+  }
+
+  const probeArgs =
+    runtime === "docker" ?
+      ["info"]
+    : ["info", "--format", "json"];
+  const result = spawnSync(runtimePath, probeArgs, {
+    encoding: "utf8",
+    timeout: RUNTIME_PROBE_TIMEOUT_MS,
+  });
+
+  if (result.error) {
+    const errorMessage =
+      result.error.name === "TimeoutError" ? "runtime probe timed out"
+      : result.error.message;
+    return {
+      ok: false,
+      reason: `${runtime} found but not usable: ${errorMessage}`,
+    };
+  }
+
+  if (result.status === 0) {
+    return {
+      ok: true,
+      reason: `${runtime} runtime accessible`,
+    };
+  }
+
+  const combinedOutput = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
+  return {
+    ok: false,
+    reason: `${runtime} found but not usable: ${summarizeProbeFailure(combinedOutput)}`,
+  };
 }
 
 function loadAgentToken(): {
@@ -193,7 +263,9 @@ function loadAgentToken(): {
   };
 }
 
-function loadRuntimeEnvironmentHints(): RuntimeEnvironmentHints {
+function loadRuntimeEnvironmentHints(
+  options: RuntimeHintOptions
+): RuntimeEnvironmentHints {
   const kubectlBin = process.env.SIGNALFORGE_KUBECTL_BIN?.trim() || "kubectl";
   const kubeconfigRaw =
     process.env.SIGNALFORGE_KUBECONFIG?.trim() || process.env.KUBECONFIG?.trim() || "";
@@ -204,20 +276,47 @@ function loadRuntimeEnvironmentHints(): RuntimeEnvironmentHints {
   if (kubeconfigPath) {
     process.env.KUBECONFIG = kubeconfigPath;
   }
+
+  if (!options.probeContainerRuntime) {
+    const containerRuntime =
+      resolveExecutableOnPath("docker") ? "docker"
+      : resolveExecutableOnPath("podman") ? "podman"
+      : null;
+    return {
+      kubectlBin,
+      kubeconfigPath,
+      containerRuntime,
+      containerRuntimeReason:
+        containerRuntime ?
+          `${containerRuntime} binary found (runtime access not probed)`
+        : "missing container runtime binary on PATH (docker or podman)",
+    };
+  }
+
+  const dockerProbe = probeContainerRuntime("docker");
+  const podmanProbe = probeContainerRuntime("podman");
+  const accessibleRuntime =
+    dockerProbe.ok ? "docker"
+    : podmanProbe.ok ? "podman"
+    : null;
+
   return {
     kubectlBin,
     kubeconfigPath,
-    containerRuntime:
-      hasExecutableOnPath("docker") ? "docker"
-      : hasExecutableOnPath("podman") ? "podman"
-      : null,
+    containerRuntime: accessibleRuntime,
+    containerRuntimeReason:
+      dockerProbe.ok ? dockerProbe.reason
+      : podmanProbe.ok ? podmanProbe.reason
+      : !dockerProbe.ok && dockerProbe.reason !== "missing docker binary on PATH" ? dockerProbe.reason
+      : !podmanProbe.ok && podmanProbe.reason !== "missing podman binary on PATH" ? podmanProbe.reason
+      : "missing container runtime binary on PATH (docker or podman)",
   };
 }
 
 /**
  * Load config from environment. Uses SIGNALFORGE_URL or SIGNALFORGE_BASE_URL.
  */
-export function loadConfig(): AgentConfig {
+export function loadConfig(options: { probeRuntimeReadiness?: boolean } = {}): AgentConfig {
   const baseRaw =
     process.env.SIGNALFORGE_URL?.trim() || process.env.SIGNALFORGE_BASE_URL?.trim();
   if (!baseRaw) {
@@ -227,7 +326,6 @@ export function loadConfig(): AgentConfig {
 
   const token = loadAgentToken();
   const instanceId = requireEnv("SIGNALFORGE_AGENT_INSTANCE_ID");
-  const runtimeHints = loadRuntimeEnvironmentHints();
 
   const override = process.env.SIGNALFORGE_AGENT_ARTIFACT_FILE?.trim() || null;
   let collectorsDir = process.env.SIGNALFORGE_COLLECTORS_DIR?.trim() || "";
@@ -279,6 +377,10 @@ export function loadConfig(): AgentConfig {
     process.env.SIGNALFORGE_AGENT_VERSION?.trim() || DEFAULT_AGENT_VERSION;
 
   const capabilitiesRaw = process.env.SIGNALFORGE_AGENT_CAPABILITIES?.trim();
+  const runtimeHints = loadRuntimeEnvironmentHints({
+    probeContainerRuntime:
+      options.probeRuntimeReadiness === true || (!capabilitiesRaw && !override),
+  });
   const capabilities =
     capabilitiesRaw ?
       parseCapabilityList(capabilitiesRaw)
@@ -307,6 +409,7 @@ export function loadConfig(): AgentConfig {
     instanceId,
     collectorsDir,
     containerRuntime: runtimeHints.containerRuntime,
+    containerRuntimeReason: runtimeHints.containerRuntimeReason,
     kubectlBin: runtimeHints.kubectlBin,
     kubeconfigPath: runtimeHints.kubeconfigPath,
     capabilities,
