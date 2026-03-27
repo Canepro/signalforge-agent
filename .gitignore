@@ -3,3 +3,4 @@ node_modules/
 *.log
 .DS_Store
 contrib/systemd/signalforge-agent.env
+contrib/systemd/signalforge-agent.token

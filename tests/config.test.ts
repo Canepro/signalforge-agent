@@ -2,12 +2,17 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { ConfigError, loadConfig } from "../src/config.ts";
+import {
+  ConfigError,
+  loadConfig,
+  runtimeCapabilityChecksForEnvironment,
+} from "../src/config.ts";
 
 const KEYS = [
   "SIGNALFORGE_URL",
   "SIGNALFORGE_BASE_URL",
   "SIGNALFORGE_AGENT_TOKEN",
+  "SIGNALFORGE_AGENT_TOKEN_FILE",
   "SIGNALFORGE_AGENT_INSTANCE_ID",
   "SIGNALFORGE_COLLECTORS_DIR",
   "SIGNALFORGE_POLL_INTERVAL_MS",
@@ -74,6 +79,19 @@ describe("loadConfig", () => {
     expect(c.artifactFileOverride).toContain("x.log");
     expect(c.leaseHeartbeatMs).toBe(45_000);
     expect(c.capabilities).toEqual(["upload:multipart"]);
+  });
+
+  test("loads token from SIGNALFORGE_AGENT_TOKEN_FILE", async () => {
+    const tokenFile = join(await makeTempDir("sf-agent-token-"), "token");
+    await writeFile(tokenFile, "token-from-file\n", "utf8");
+    process.env.SIGNALFORGE_URL = "http://localhost:3000";
+    process.env.SIGNALFORGE_AGENT_TOKEN_FILE = tokenFile;
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_AGENT_ARTIFACT_FILE = "/tmp/x.log";
+    const c = loadConfig();
+    expect(c.agentToken).toBe("token-from-file");
+    expect(c.agentTokenSource).toBe("file");
+    expect(c.agentTokenFile).toContain("token");
   });
 
   test("parses optional capability set", () => {
@@ -177,5 +195,35 @@ describe("loadConfig", () => {
     process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
     process.env.SIGNALFORGE_POLL_INTERVAL_MS = "500";
     expect(() => loadConfig()).toThrow(ConfigError);
+  });
+});
+
+describe("runtimeCapabilityChecksForEnvironment", () => {
+  test("reports readiness reasons for missing runtimes", async () => {
+    const collectorsDir = await makeTempDir("sf-agent-collectors-");
+    await writeExecutable(join(collectorsDir, "first-audit.sh"));
+    await writeExecutable(join(collectorsDir, "collect-container-diagnostics.sh"));
+    await writeExecutable(join(collectorsDir, "collect-kubernetes-bundle.sh"));
+
+    process.env.PATH = "";
+    process.env.SIGNALFORGE_KUBECTL_BIN = "kubectl";
+
+    expect(runtimeCapabilityChecksForEnvironment(collectorsDir, null)).toEqual([
+      {
+        capability: "collect:linux-audit-log",
+        enabled: true,
+        reason: "first-audit.sh found",
+      },
+      {
+        capability: "collect:container-diagnostics",
+        enabled: false,
+        reason: "missing container runtime binary on PATH (docker or podman)",
+      },
+      {
+        capability: "collect:kubernetes-bundle",
+        enabled: false,
+        reason: "missing kubectl binary on PATH (kubectl)",
+      },
+    ]);
   });
 });

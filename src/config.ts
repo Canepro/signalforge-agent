@@ -1,9 +1,11 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 
 export interface AgentConfig {
   baseUrl: string;
   agentToken: string;
+  agentTokenSource: "env" | "file";
+  agentTokenFile: string | null;
   instanceId: string;
   collectorsDir: string;
   capabilities: string[];
@@ -34,6 +36,12 @@ const DEFAULT_JOBS_WAIT_SECONDS = 20;
 const DEFAULT_LEASE_HEARTBEAT_MS = 45_000;
 const DEFAULT_AGENT_VERSION = "0.1.0";
 
+export interface RuntimeCapabilityCheck {
+  capability: Exclude<AgentConfig["capabilities"][number], "upload:multipart">;
+  enabled: boolean;
+  reason: string;
+}
+
 function hasExecutableOnPath(name: string): boolean {
   const pathValue = process.env.PATH ?? "";
   for (const dir of pathValue.split(delimiter)) {
@@ -47,41 +55,127 @@ function collectorsScriptExists(collectorsDir: string, script: string): boolean 
   return existsSync(join(collectorsDir, script));
 }
 
+export function runtimeCapabilityChecksForEnvironment(
+  collectorsDir: string,
+  artifactFileOverride: string | null
+): RuntimeCapabilityCheck[] {
+  if (artifactFileOverride) {
+    return [
+      {
+        capability: "collect:linux-audit-log",
+        enabled: false,
+        reason: "artifact override mode skips collector dispatch",
+      },
+      {
+        capability: "collect:container-diagnostics",
+        enabled: false,
+        reason: "artifact override mode skips collector dispatch",
+      },
+      {
+        capability: "collect:kubernetes-bundle",
+        enabled: false,
+        reason: "artifact override mode skips collector dispatch",
+      },
+    ];
+  }
+
+  const hasLinuxScript = collectorsScriptExists(collectorsDir, "first-audit.sh");
+  const hasContainerScript = collectorsScriptExists(
+    collectorsDir,
+    "collect-container-diagnostics.sh"
+  );
+  const hasDocker = hasExecutableOnPath("docker");
+  const hasPodman = hasExecutableOnPath("podman");
+  const hasKubernetesScript = collectorsScriptExists(
+    collectorsDir,
+    "collect-kubernetes-bundle.sh"
+  );
+  const kubectlBin = process.env.SIGNALFORGE_KUBECTL_BIN?.trim() || "kubectl";
+  const hasKubectl = hasExecutableOnPath(kubectlBin);
+
+  return [
+    {
+      capability: "collect:linux-audit-log",
+      enabled: hasLinuxScript,
+      reason:
+        hasLinuxScript ? "first-audit.sh found" : "missing first-audit.sh in collectors dir",
+    },
+    {
+      capability: "collect:container-diagnostics",
+      enabled: hasContainerScript && (hasDocker || hasPodman),
+      reason:
+        !hasContainerScript ? "missing collect-container-diagnostics.sh in collectors dir"
+        : hasDocker || hasPodman ? `runtime binary found (${hasDocker ? "docker" : "podman"})`
+        : "missing container runtime binary on PATH (docker or podman)",
+    },
+    {
+      capability: "collect:kubernetes-bundle",
+      enabled: hasKubernetesScript && hasKubectl,
+      reason:
+        !hasKubernetesScript ? "missing collect-kubernetes-bundle.sh in collectors dir"
+        : hasKubectl ? `kubectl binary found (${kubectlBin})`
+        : `missing kubectl binary on PATH (${kubectlBin})`,
+    },
+  ];
+}
+
 function defaultCapabilitiesForEnvironment(
   collectorsDir: string,
   artifactFileOverride: string | null
 ): string[] {
-  if (artifactFileOverride) {
-    return ["upload:multipart"];
-  }
-
-  const capabilities: string[] = [];
-
-  if (collectorsScriptExists(collectorsDir, "first-audit.sh")) {
-    capabilities.push("collect:linux-audit-log");
-  }
-
-  if (
-    collectorsScriptExists(collectorsDir, "collect-container-diagnostics.sh") &&
-    (hasExecutableOnPath("podman") || hasExecutableOnPath("docker"))
-  ) {
-    capabilities.push("collect:container-diagnostics");
-  }
-
-  if (
-    collectorsScriptExists(collectorsDir, "collect-kubernetes-bundle.sh") &&
-    hasExecutableOnPath(process.env.SIGNALFORGE_KUBECTL_BIN?.trim() || "kubectl")
-  ) {
-    capabilities.push("collect:kubernetes-bundle");
-  }
-
-  capabilities.push("upload:multipart");
-  return capabilities;
+  return [
+    ...runtimeCapabilityChecksForEnvironment(collectorsDir, artifactFileOverride)
+      .filter((check) => check.enabled)
+      .map((check) => check.capability),
+    "upload:multipart",
+  ];
 }
 
 function parseCapabilityList(raw: string | undefined): string[] {
   if (!raw) return [];
   return [...new Set(raw.split(",").map((part) => part.trim()).filter(Boolean))];
+}
+
+function loadAgentToken(): {
+  token: string;
+  source: "env" | "file";
+  tokenFile: string | null;
+} {
+  const envToken = process.env.SIGNALFORGE_AGENT_TOKEN?.trim() || "";
+  if (envToken) {
+    return {
+      token: envToken,
+      source: "env",
+      tokenFile: null,
+    };
+  }
+
+  const tokenFileRaw = process.env.SIGNALFORGE_AGENT_TOKEN_FILE?.trim() || "";
+  if (!tokenFileRaw) {
+    throw new ConfigError(
+      "Set SIGNALFORGE_AGENT_TOKEN or SIGNALFORGE_AGENT_TOKEN_FILE"
+    );
+  }
+
+  const tokenFile = resolve(tokenFileRaw);
+  let token = "";
+  try {
+    token = readFileSync(tokenFile, "utf8").trim();
+  } catch (error) {
+    throw new ConfigError(
+      `Could not read SIGNALFORGE_AGENT_TOKEN_FILE: ${tokenFile} (${error instanceof Error ? error.message : String(error)})`
+    );
+  }
+  if (!token) {
+    throw new ConfigError(
+      `SIGNALFORGE_AGENT_TOKEN_FILE is empty: ${tokenFile}`
+    );
+  }
+  return {
+    token,
+    source: "file",
+    tokenFile,
+  };
 }
 
 /**
@@ -95,7 +189,7 @@ export function loadConfig(): AgentConfig {
   }
   const baseUrl = baseRaw.replace(/\/+$/, "");
 
-  const agentToken = requireEnv("SIGNALFORGE_AGENT_TOKEN");
+  const token = loadAgentToken();
   const instanceId = requireEnv("SIGNALFORGE_AGENT_INSTANCE_ID");
 
   const override = process.env.SIGNALFORGE_AGENT_ARTIFACT_FILE?.trim() || null;
@@ -155,7 +249,9 @@ export function loadConfig(): AgentConfig {
 
   return {
     baseUrl,
-    agentToken,
+    agentToken: token.token,
+    agentTokenSource: token.source,
+    agentTokenFile: token.tokenFile,
     instanceId,
     collectorsDir,
     capabilities,

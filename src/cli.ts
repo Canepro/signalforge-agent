@@ -7,6 +7,7 @@ import { AuthError } from "./api.ts";
 import { ConfigError, loadConfig } from "./config.ts";
 import { logError, logInfo, logWarn } from "./log.ts";
 import { runSingleCycle } from "./job-runner.ts";
+import { runPreflight } from "./preflight.ts";
 
 const VERSION = "0.1.0";
 
@@ -32,12 +33,14 @@ Execution-plane agent for SignalForge: heartbeat, poll, claim, dispatch collecto
 Usage:
   signalforge-agent once    Heartbeat + process at most one queued job, then exit
   signalforge-agent run     Poll loop (SIGNALFORGE_POLL_INTERVAL_MS between cycles)
+  signalforge-agent preflight  Validate config and local collector/runtime readiness
   signalforge-agent help    Show this help
   signalforge-agent version Print version
 
 Environment (see .env.example):
   SIGNALFORGE_URL / SIGNALFORGE_BASE_URL   SignalForge origin (no trailing slash)
   SIGNALFORGE_AGENT_TOKEN                Source-bound agent Bearer token
+  SIGNALFORGE_AGENT_TOKEN_FILE           Optional file containing the source-bound token
   SIGNALFORGE_AGENT_INSTANCE_ID          Opaque stable id for this process
   SIGNALFORGE_COLLECTORS_DIR             Path to signalforge-collectors collector scripts
   SIGNALFORGE_AGENT_CAPABILITIES         Optional comma-separated heartbeat capabilities override
@@ -142,6 +145,8 @@ async function main(): Promise<void> {
       code = await cmdOnce();
     } else if (cmd === "run") {
       code = await cmdRun();
+    } else if (cmd === "preflight") {
+      code = runPreflight(argv.slice(1));
     } else {
       printHelp();
       code = EXIT.USAGE;

@@ -45,7 +45,8 @@ All configuration is **environment variables** (see `.env.example`).
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `SIGNALFORGE_URL` or `SIGNALFORGE_BASE_URL` | yes | Origin only, no trailing slash (e.g. `http://localhost:3000`) |
-| `SIGNALFORGE_AGENT_TOKEN` | yes | Bearer token from `POST /api/agent/registrations` (one source per token) |
+| `SIGNALFORGE_AGENT_TOKEN` | yes* | Bearer token from `POST /api/agent/registrations` (one source per token) |
+| `SIGNALFORGE_AGENT_TOKEN_FILE` | yes* | File containing the bearer token. Preferred for long-running services. |
 | `SIGNALFORGE_AGENT_INSTANCE_ID` | yes | Opaque stable id for **this process**; must match claim/start/fail/artifact and lease-extension heartbeats |
 | `SIGNALFORGE_COLLECTORS_DIR` | yes* | Absolute path to **signalforge-collectors** root (family-specific collector scripts live there) |
 | `SIGNALFORGE_AGENT_CAPABILITIES` | no | Comma-separated heartbeat capabilities. When omitted, the agent derives capabilities from local readiness and always includes `upload:multipart` |
@@ -55,7 +56,7 @@ All configuration is **environment variables** (see `.env.example`).
 | `SIGNALFORGE_AGENT_ARTIFACT_FILE` | no | If set, **skip** collector dispatch and upload this file (tests / air-gapped) |
 | `SIGNALFORGE_AGENT_VERSION` | no | Sent as `agent_version` on heartbeat (default: package version) |
 
-\* Not required when `SIGNALFORGE_AGENT_ARTIFACT_FILE` is set.
+\* Set **one** of `SIGNALFORGE_AGENT_TOKEN` or `SIGNALFORGE_AGENT_TOKEN_FILE`. `SIGNALFORGE_AGENT_TOKEN_FILE` is the preferred service path. `SIGNALFORGE_COLLECTORS_DIR` is not required when `SIGNALFORGE_AGENT_ARTIFACT_FILE` is set.
 
 Example:
 
@@ -74,6 +75,7 @@ export SIGNALFORGE_AGENT_CAPABILITIES='collect:linux-audit-log,upload:multipart'
 |---------|----------|
 | `signalforge-agent once` | Idle heartbeat → poll **one** `GET /api/agent/jobs/next` → if a job exists, claim → start → collect → `POST …/artifact` → exit |
 | `signalforge-agent run` | Idle heartbeat → long-poll `GET /api/agent/jobs/next` → process work immediately when available; backs off by `SIGNALFORGE_POLL_INTERVAL_MS` on gate/error paths |
+| `signalforge-agent preflight` | Validate config, token source, and locally runnable collector/runtime capabilities before enabling the service |
 | `signalforge-agent help` | Usage and env summary |
 | `signalforge-agent version` | Print version |
 
@@ -140,11 +142,20 @@ Recommended flow:
 
 ```bash
 cp contrib/systemd/signalforge-agent.env.example contrib/systemd/signalforge-agent.env
+cp contrib/systemd/signalforge-agent.token.example contrib/systemd/signalforge-agent.token
 $EDITOR contrib/systemd/signalforge-agent.env
+$EDITOR contrib/systemd/signalforge-agent.token
 sudo ./scripts/install-systemd-service.sh
 ```
 
-The installer copies your env file to `/etc/signalforge-agent.env`, renders the service with the current checkout path, user, and absolute Bun binary, then runs:
+The installer:
+
+- copies your env file to `/etc/signalforge-agent.env`
+- copies the token to `/etc/signalforge-agent/token`
+- strips any inline token from the installed env file
+- renders the service with the current checkout path, user, absolute Bun binary, and a `LoadCredential=` token mount
+- runs a `preflight --quiet` gate before `ExecStart`
+- then runs:
 
 - `systemctl daemon-reload`
 - `systemctl enable --now signalforge-agent`
@@ -155,6 +166,33 @@ After install:
 systemctl status signalforge-agent
 journalctl -u signalforge-agent -f
 ```
+
+To inspect the rendered unit and installed credential layout without touching `systemd`:
+
+```bash
+./scripts/install-systemd-service.sh --dry-run
+```
+
+### Deployment profiles
+
+Preferred default:
+
+- deploy `signalforge-agent run` as a long-running `systemd` service on the host nearest the execution surface
+- keep the token in a root-controlled file, not in shell history or process args
+- run `signalforge-agent preflight` before enabling the unit
+
+Container diagnostics host:
+
+- use a dedicated runner host or the runtime host itself
+- grant only the runtime access you actually need, for example `docker` or `podman`
+- treat membership that can reach the container socket as elevated trust
+
+Kubernetes diagnostics host:
+
+- prefer a dedicated cluster-side runner or bastion over operator laptops
+- point `KUBECONFIG` at a root-controlled service kubeconfig
+- grant least-privilege RBAC for the bundle surfaces you collect
+- keep `kubectl` on a fixed path and verify it with `signalforge-agent preflight`
 
 If you want fixed-time scheduled collection instead, use cron or a systemd timer with `signalforge-agent once`, but that is less responsive for operator-triggered “collect now” requests because queued jobs wait until the next invocation.
 

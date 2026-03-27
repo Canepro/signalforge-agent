@@ -30,6 +30,8 @@ function testConfig(): AgentConfig {
   return {
     baseUrl: "http://localhost:3000",
     agentToken: "test-token",
+    agentTokenSource: "env",
+    agentTokenFile: null,
     instanceId: "test-instance",
     collectorsDir: "/tmp/collectors",
     capabilities: [
