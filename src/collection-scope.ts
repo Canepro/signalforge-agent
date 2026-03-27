@@ -94,3 +94,27 @@ export function parseCollectionScope(value: unknown): CollectionScope | null {
 
   return null;
 }
+
+export function summarizeCollectionScope(
+  value: CollectionScope | null | undefined
+): string {
+  if (!value) return "none";
+
+  if (value.kind === "linux_host") {
+    return "linux_host";
+  }
+
+  if (value.kind === "container_target") {
+    const parts = [`container_ref=${value.container_ref}`];
+    if (value.runtime) parts.push(`runtime=${value.runtime}`);
+    if (value.host_hint) parts.push(`host_hint=${value.host_hint}`);
+    return `container_target(${parts.join(", ")})`;
+  }
+
+  const parts = [`scope_level=${value.scope_level}`];
+  if (value.namespace) parts.push(`namespace=${value.namespace}`);
+  if (value.kubectl_context) parts.push(`kubectl_context=${value.kubectl_context}`);
+  if (value.cluster_name) parts.push(`cluster_name=${value.cluster_name}`);
+  if (value.provider) parts.push(`provider=${value.provider}`);
+  return `kubernetes_scope(${parts.join(", ")})`;
+}

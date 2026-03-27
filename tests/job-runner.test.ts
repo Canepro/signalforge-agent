@@ -474,6 +474,11 @@ printf '{}\n' > "${producedPath}"
       ...testConfig(),
       collectorsDir,
     };
+    const seenLogs: string[] = [];
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      seenLogs.push(args.map((part) => String(part)).join(" "));
+    };
 
     try {
       const r = await runSingleCycle(cfg, fetchImpl);
@@ -482,7 +487,15 @@ printf '{}\n' > "${producedPath}"
       expect(args).toContain(
         "--scope namespace --namespace payments --context prod-eu-1 --cluster-name aks-prod-eu-1 --provider aks"
       );
+      expect(
+        seenLogs.some((line) =>
+          line.includes(
+            "claimed job 66666666-6666-6666-6666-666666666666 artifact_type=kubernetes-bundle scope=kubernetes_scope(scope_level=namespace, namespace=payments, kubectl_context=prod-eu-1, cluster_name=aks-prod-eu-1, provider=aks)"
+          )
+        )
+      ).toBe(true);
     } finally {
+      console.error = originalConsoleError;
       await unlink(scriptPath).catch(() => undefined);
       await unlink(producedPath).catch(() => undefined);
       await unlink(argsPath).catch(() => undefined);

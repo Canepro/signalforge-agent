@@ -110,6 +110,8 @@ In **`run`** mode, **claim conflict (5)** is logged and the loop continues after
 10. **Agent** `POST /api/collection-jobs/{id}/artifact` with multipart `file` + form fields `instance_id` and `artifact_type`.
 11. On collector or upload failure, **agent** `POST …/fail` with `instance_id`, `code` (`collector_failed`, `agent_failed`, or `lease_not_extended`), and `message`. stderr includes server error bodies when available.
 
+During execution, the claim log now includes the queued job id, artifact family, and resolved scope summary so non-Linux support and operator intent are visible in support logs without reconstructing the job from the API.
+
 Contract details: SignalForge [`plans/phase-6b-source-job-api-contract.md`](https://github.com/Canepro/signalforge/blob/main/plans/phase-6b-source-job-api-contract.md), [`docs/api-contract.md`](https://github.com/Canepro/signalforge/blob/main/docs/api-contract.md).
 
 ## Collector invocation
