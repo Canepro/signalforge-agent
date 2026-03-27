@@ -140,6 +140,10 @@ The repo includes:
 - `contrib/systemd/signalforge-agent.service` — template rendered by the installer
 - `contrib/systemd/signalforge-agent.env.example` — copy to a local env file and fill once
 - `scripts/install-systemd-service.sh` — installs the env file and service, reloads `systemd`, and enables the unit
+- `contrib/container/Dockerfile` — reference image that bakes the agent plus `signalforge-collectors`
+- `contrib/container/docker-compose.yml` — reference container-host deployment for `container-diagnostics`
+- `contrib/kubernetes/deployment.yaml` — reference cluster-side deployment for `kubernetes-bundle`
+- `scripts/build-container-image.sh` — builds the reference image from sibling `signalforge-agent` and `signalforge-collectors` checkouts
 
 Recommended flow:
 
@@ -180,30 +184,98 @@ To inspect the rendered unit and installed credential layout without touching `s
 ./scripts/install-systemd-service.sh --dry-run
 ```
 
-### Deployment profiles
+### Preferred deployment matrix
 
-Preferred default:
+The preferred long-running form depends on the artifact family and execution surface.
 
-- deploy `signalforge-agent run` as a long-running `systemd` service on the host nearest the execution surface
-- keep the token in a root-controlled file, not in shell history or process args
-- run `signalforge-agent preflight` before enabling the unit
+| Artifact family | Preferred deployment form | Why |
+|----------------|---------------------------|-----|
+| `linux-audit-log` | host `systemd` service | The collector audits the host itself. Running it inside another container would audit the wrong surface. |
+| `container-diagnostics` | containerized runner on the runtime host | Easier long-running packaging for teams already operating Docker or Podman, while still staying near the runtime socket. |
+| `kubernetes-bundle` | cluster-side Kubernetes Deployment | Best fit for always-on polling with explicit kubeconfig or in-cluster identity and without depending on a laptop or ambient shell context. |
 
-Container diagnostics host:
+Across all forms:
 
-- use a dedicated runner host or the runtime host itself
-- grant only the runtime access you actually need, for example `docker` or `podman`
-- treat membership that can reach the container socket as elevated trust
-- use `signalforge-agent preflight` as the service user to confirm the runtime is actually usable before enabling the unit
-- for Docker, verify the service account can reach the daemon socket or equivalent rootless endpoint, not just the `docker` binary
-- for Podman, verify the service account can run `podman info` in the intended rootless or privileged mode
+- keep the token in a root-controlled file or mounted secret, not in shell history or process args
+- pin capabilities to the family that actually makes sense for that deployment form
+- run `signalforge-agent preflight` before enabling or promoting the workload
 
-Kubernetes diagnostics host:
+### Preferred container-host packaging for `container-diagnostics`
 
-- prefer a dedicated cluster-side runner or bastion over operator laptops
-- point `KUBECONFIG` at a root-controlled service kubeconfig
-- if you use the bundled installer path, stage that kubeconfig as `contrib/systemd/signalforge-agent.kubeconfig` so it lands at `/etc/signalforge-agent/kubeconfig`
-- grant least-privilege RBAC for the bundle surfaces you collect
-- keep `kubectl` on a fixed path and verify it with `signalforge-agent preflight`
+Build the image from sibling repo checkouts:
+
+```bash
+./scripts/build-container-image.sh signalforge-agent:local
+```
+
+This expects the default workspace layout:
+
+- `../signalforge-agent`
+- `../signalforge-collectors`
+
+Or set `SIGNALFORGE_COLLECTORS_REPO=/absolute/path/to/signalforge-collectors`.
+
+Important constraints:
+
+- the image contains all collectors, so containerized deployments should pin `SIGNALFORGE_AGENT_CAPABILITIES` to the family that actually makes sense there
+- the bundled Docker Compose file is for a container-host runner and pins `collect:container-diagnostics,upload:multipart`
+- the bundled Kubernetes deployment pins `collect:kubernetes-bundle,upload:multipart`
+- do not run the image with auto-derived capabilities and assume Linux host collection is valid from inside the container
+
+Container-host runner with Docker:
+
+```bash
+cp contrib/container/signalforge-agent.container.env.example contrib/container/signalforge-agent.container.env
+cp contrib/container/signalforge-agent.container.token.example contrib/container/signalforge-agent.container.token
+$EDITOR contrib/container/signalforge-agent.container.env
+$EDITOR contrib/container/signalforge-agent.container.token
+docker-compose -f contrib/container/docker-compose.yml up -d
+```
+
+This form mounts `/var/run/docker.sock` and should be treated as a higher-trust host profile.
+The reference Compose file runs the container with a read-only root filesystem plus a writable tmpfs at `/work`, which is where collectors emit temporary artifacts before upload.
+
+Treat this as the preferred long-running packaging form when:
+
+- you are collecting `container-diagnostics`
+- the runtime host already operates Docker or Podman comfortably
+- mounting the runtime socket into the runner is an acceptable trust tradeoff
+
+Still validate:
+
+- `signalforge-agent preflight` as the final runtime user or container user
+- actual daemon or socket reachability, not just the runtime binary
+
+### Preferred cluster-side packaging for `kubernetes-bundle`
+
+Use the bundled deployment manifest when a cluster-side runner is the right operational model:
+
+```bash
+kubectl apply -f contrib/kubernetes/deployment.yaml
+```
+
+Before using it:
+
+- replace the placeholder token and kubeconfig secrets
+- replace the placeholder image reference if you push the built image to a registry
+- keep the capability override pinned to `collect:kubernetes-bundle,upload:multipart`
+- keep the writable `emptyDir` mounted at `/work`, because collectors emit artifacts before upload
+
+Treat this as the preferred long-running packaging form when:
+
+- you are collecting `kubernetes-bundle`
+- a cluster-side Deployment is easier to operate than a bastion or host service
+- explicit kubeconfig or future in-cluster identity is acceptable for that cluster
+
+### Preferred host `systemd` packaging for `linux-audit-log`
+
+Use the `systemd` install flow as the preferred path for Linux and WSL host audit collection:
+
+- `contrib/systemd/signalforge-agent.service`
+- `contrib/systemd/signalforge-agent.env.example`
+- `scripts/install-systemd-service.sh`
+
+This remains the preferred path for `linux-audit-log` because the audit should run on the host itself, not inside a wrapper container that would inspect the wrong filesystem, process table, and network namespace.
 
 If you want fixed-time scheduled collection instead, use cron or a systemd timer with `signalforge-agent once`, but that is less responsive for operator-triggered “collect now” requests because queued jobs wait until the next invocation.
 

@@ -5,3 +5,6 @@ node_modules/
 contrib/systemd/signalforge-agent.env
 contrib/systemd/signalforge-agent.token
 contrib/systemd/signalforge-agent.kubeconfig
+contrib/container/signalforge-agent.container.env
+contrib/container/signalforge-agent.container.token
+contrib/container/signalforge-agent.container.kubeconfig

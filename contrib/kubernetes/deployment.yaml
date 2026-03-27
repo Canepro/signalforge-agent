@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: signalforge-agent-token
+type: Opaque
+stringData:
+  token: replace-me
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: signalforge-agent-kubeconfig
+type: Opaque
+stringData:
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    clusters: []
+    contexts: []
+    current-context: ""
+    users: []
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signalforge-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: signalforge-agent
+  template:
+    metadata:
+      labels:
+        app: signalforge-agent
+    spec:
+      containers:
+        - name: signalforge-agent
+          image: signalforge-agent:local
+          imagePullPolicy: IfNotPresent
+          workingDir: /work
+          args: ["run"]
+          env:
+            - name: SIGNALFORGE_URL
+              value: http://signalforge.default.svc.cluster.local:3000
+            - name: SIGNALFORGE_AGENT_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SIGNALFORGE_AGENT_TOKEN_FILE
+              value: /var/run/signalforge-agent/token
+            - name: SIGNALFORGE_KUBECONFIG
+              value: /var/run/signalforge-agent/kubeconfig
+            - name: SIGNALFORGE_AGENT_CAPABILITIES
+              value: collect:kubernetes-bundle,upload:multipart
+          volumeMounts:
+            - name: token
+              mountPath: /var/run/signalforge-agent/token
+              subPath: token
+              readOnly: true
+            - name: kubeconfig
+              mountPath: /var/run/signalforge-agent/kubeconfig
+              subPath: kubeconfig
+              readOnly: true
+            - name: workdir
+              mountPath: /work
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: token
+          secret:
+            secretName: signalforge-agent-token
+        - name: kubeconfig
+          secret:
+            secretName: signalforge-agent-kubeconfig
+        - name: workdir
+          emptyDir: {}
