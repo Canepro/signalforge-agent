@@ -13,6 +13,7 @@ import {
   runCollectorForArtifactType,
   runFirstAuditScript,
 } from "./collector.ts";
+import { summarizeCollectionScope } from "./collection-scope.ts";
 import { logError, logInfo, logWarn } from "./log.ts";
 const LEASE_TTL_SECONDS = 300;
 const LEASE_FAIL_CODE = "lease_not_extended";
@@ -87,6 +88,7 @@ export async function processOneQueuedJob(
   collectionScope: AgentJobSummary["collection_scope"]
 ): Promise<ProcessJobResult> {
   const { instanceId } = cfg;
+  const scopeSummary = summarizeCollectionScope(collectionScope);
 
   try {
     await client.claim(jobId, instanceId, LEASE_TTL_SECONDS);
@@ -103,7 +105,7 @@ export async function processOneQueuedJob(
     };
   }
 
-  logInfo(`claimed job ${jobId}`);
+  logInfo(`claimed job ${jobId} artifact_type=${artifactType} scope=${scopeSummary}`);
 
   try {
     await client.start(jobId, instanceId);

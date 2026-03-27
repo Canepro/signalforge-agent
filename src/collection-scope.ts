@@ -23,6 +23,12 @@ export type CollectionScope =
   | ContainerTargetCollectionScope
   | KubernetesScopeCollectionScope;
 
+function encodeLogTokenComponent(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+}
+
 function hasOnlyKeys(
   value: Record<string, unknown>,
   allowedKeys: readonly string[]
@@ -93,4 +99,38 @@ export function parseCollectionScope(value: unknown): CollectionScope | null {
   }
 
   return null;
+}
+
+export function summarizeCollectionScope(
+  value: CollectionScope | null | undefined
+): string {
+  if (!value) return "none";
+
+  switch (value.kind) {
+    case "linux_host": {
+      return "linux_host";
+    }
+    case "container_target": {
+      const parts = [`container_ref=${encodeLogTokenComponent(value.container_ref)}`];
+      if (value.runtime) parts.push(`runtime=${value.runtime}`);
+      if (value.host_hint) parts.push(`host_hint=${encodeLogTokenComponent(value.host_hint)}`);
+      return `container_target(${parts.join(",")})`;
+    }
+    case "kubernetes_scope": {
+      const parts = [`scope_level=${value.scope_level}`];
+      if (value.namespace) parts.push(`namespace=${encodeLogTokenComponent(value.namespace)}`);
+      if (value.kubectl_context) {
+        parts.push(`kubectl_context=${encodeLogTokenComponent(value.kubectl_context)}`);
+      }
+      if (value.cluster_name) {
+        parts.push(`cluster_name=${encodeLogTokenComponent(value.cluster_name)}`);
+      }
+      if (value.provider) parts.push(`provider=${encodeLogTokenComponent(value.provider)}`);
+      return `kubernetes_scope(${parts.join(",")})`;
+    }
+    default: {
+      const exhaustiveCheck: never = value;
+      return exhaustiveCheck;
+    }
+  }
 }
