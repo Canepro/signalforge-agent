@@ -8,11 +8,13 @@ ENV_EXAMPLE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.env.example"
 ENV_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.env"
 TOKEN_EXAMPLE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.token.example"
 TOKEN_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.token"
+KUBECONFIG_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.kubeconfig"
 
 SERVICE_NAME="signalforge-agent"
 SERVICE_TARGET_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 ENV_TARGET_PATH="/etc/${SERVICE_NAME}.env"
 TOKEN_TARGET_PATH="/etc/${SERVICE_NAME}/token"
+KUBECONFIG_TARGET_PATH="/etc/${SERVICE_NAME}/kubeconfig"
 AGENT_USER="${SUDO_USER:-$(id -un)}"
 WORKDIR="$REPO_DIR"
 BUN_BIN=""
@@ -30,6 +32,8 @@ Options:
   --env-target <path>    installed env file path (default: ${ENV_TARGET_PATH})
   --token-source <path>  repo-local token file to install (default: ${TOKEN_SOURCE_PATH})
   --token-target <path>  installed token file path (default: ${TOKEN_TARGET_PATH})
+  --kubeconfig-source <path> optional repo-local kubeconfig to install (default: ${KUBECONFIG_SOURCE_PATH})
+  --kubeconfig-target <path> installed kubeconfig path (default: ${KUBECONFIG_TARGET_PATH})
   --service-name <name>  systemd unit name without .service (default: ${SERVICE_NAME})
   --bun <path>           absolute bun binary path (default: auto-detect)
   --dry-run              render into a temporary staging root and skip systemctl
@@ -68,11 +72,20 @@ while [[ $# -gt 0 ]]; do
       TOKEN_TARGET_PATH="$2"
       shift 2
       ;;
+    --kubeconfig-source)
+      KUBECONFIG_SOURCE_PATH="$2"
+      shift 2
+      ;;
+    --kubeconfig-target)
+      KUBECONFIG_TARGET_PATH="$2"
+      shift 2
+      ;;
     --service-name)
       SERVICE_NAME="$2"
       SERVICE_TARGET_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
       ENV_TARGET_PATH="/etc/${SERVICE_NAME}.env"
       TOKEN_TARGET_PATH="/etc/${SERVICE_NAME}/token"
+      KUBECONFIG_TARGET_PATH="/etc/${SERVICE_NAME}/kubeconfig"
       shift 2
       ;;
     --bun)
@@ -100,6 +113,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   SERVICE_TARGET_PATH="${STAGING_ROOT}/etc/systemd/system/${SERVICE_NAME}.service"
   ENV_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}.env"
   TOKEN_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}/token"
+  KUBECONFIG_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}/kubeconfig"
 fi
 
 if [[ "$DRY_RUN" -ne 1 && "$(id -u)" -ne 0 ]]; then
@@ -171,10 +185,19 @@ if [[ -z "$TOKEN_VALUE" || "$TOKEN_VALUE" == "paste-enrollment-token-here" ]]; t
 fi
 
 mkdir -p "$(dirname "$SERVICE_TARGET_PATH")" "$(dirname "$ENV_TARGET_PATH")" "$(dirname "$TOKEN_TARGET_PATH")"
-grep -Ev '^[[:space:]]*SIGNALFORGE_AGENT_TOKEN(_FILE)?=' "$ENV_SOURCE_PATH" > "$ENV_TARGET_PATH"
+mkdir -p "$(dirname "$KUBECONFIG_TARGET_PATH")"
+if [[ -f "$KUBECONFIG_SOURCE_PATH" && -s "$KUBECONFIG_SOURCE_PATH" ]]; then
+  grep -Ev '^[[:space:]]*(SIGNALFORGE_AGENT_TOKEN(_FILE)?|SIGNALFORGE_KUBECONFIG|KUBECONFIG)=' "$ENV_SOURCE_PATH" > "$ENV_TARGET_PATH"
+else
+  grep -Ev '^[[:space:]]*SIGNALFORGE_AGENT_TOKEN(_FILE)?=' "$ENV_SOURCE_PATH" > "$ENV_TARGET_PATH"
+fi
 chmod 600 "$ENV_TARGET_PATH"
 printf '%s\n' "$TOKEN_VALUE" > "$TOKEN_TARGET_PATH"
 chmod 600 "$TOKEN_TARGET_PATH"
+if [[ -f "$KUBECONFIG_SOURCE_PATH" && -s "$KUBECONFIG_SOURCE_PATH" ]]; then
+  install -m 600 "$KUBECONFIG_SOURCE_PATH" "$KUBECONFIG_TARGET_PATH"
+  printf '\nSIGNALFORGE_KUBECONFIG=%s\n' "$KUBECONFIG_TARGET_PATH" >> "$ENV_TARGET_PATH"
+fi
 
 sed \
   -e "s|__SIGNALFORGE_AGENT_USER__|${AGENT_USER}|g" \
@@ -191,6 +214,9 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "Rendered ${SERVICE_TARGET_PATH}"
   echo "Rendered ${ENV_TARGET_PATH}"
   echo "Rendered ${TOKEN_TARGET_PATH}"
+  if [[ -f "$KUBECONFIG_TARGET_PATH" ]]; then
+    echo "Rendered ${KUBECONFIG_TARGET_PATH}"
+  fi
   exit 0
 fi
 
@@ -200,6 +226,9 @@ systemctl enable --now "${SERVICE_NAME}"
 echo "Installed ${SERVICE_TARGET_PATH}"
 echo "Installed ${ENV_TARGET_PATH}"
 echo "Installed ${TOKEN_TARGET_PATH}"
+if [[ -f "$KUBECONFIG_TARGET_PATH" ]]; then
+  echo "Installed ${KUBECONFIG_TARGET_PATH}"
+fi
 echo
 echo "Check status:"
 echo "  systemctl status ${SERVICE_NAME}"

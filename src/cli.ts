@@ -52,6 +52,8 @@ Environment (see .env.example):
   SIGNALFORGE_POLL_INTERVAL_MS           Optional; default 30000 (run-mode backoff)
   SIGNALFORGE_MAX_BACKOFF_MS            Optional; default 300000 (run-mode transient error backoff ceiling)
   SIGNALFORGE_JOBS_WAIT_SECONDS          Optional; default 20, max 20 (run-mode long-poll)
+  SIGNALFORGE_KUBECTL_BIN               Optional; override kubectl binary name or path
+  SIGNALFORGE_KUBECONFIG                Optional; explicit kubeconfig path for the service
   SIGNALFORGE_AGENT_ARTIFACT_FILE        Optional; upload file instead of running collector
   SIGNALFORGE_AGENT_VERSION              Optional; reported to heartbeat (default ${VERSION})
 

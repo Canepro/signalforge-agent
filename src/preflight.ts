@@ -17,12 +17,22 @@ export function buildPreflightLines(cfg: AgentConfig): string[] {
       `Artifact override: ${cfg.artifactFileOverride}`
     : `Collectors dir: ${cfg.collectorsDir}`
   );
+  lines.push(`Container runtime: ${cfg.containerRuntime ?? "not found"}`);
+  lines.push(`Kubectl bin: ${cfg.kubectlBin}`);
+  lines.push(
+    `Kubeconfig: ${cfg.kubeconfigPath ?? "not set (ambient/default kubectl context)"}`
+  );
   lines.push(`Backoff: base ${cfg.pollIntervalMs}ms, max ${cfg.maxBackoffMs}ms`);
   lines.push(`Effective capabilities: ${cfg.capabilities.join(", ")}`);
 
   for (const check of runtimeCapabilityChecksForEnvironment(
     cfg.collectorsDir,
-    cfg.artifactFileOverride
+    cfg.artifactFileOverride,
+    {
+      containerRuntime: cfg.containerRuntime,
+      kubectlBin: cfg.kubectlBin,
+      kubeconfigPath: cfg.kubeconfigPath,
+    }
   )) {
     lines.push(
       `- ${check.capability}: ${check.enabled ? "ready" : "not ready"} (${check.reason})`

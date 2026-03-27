@@ -8,6 +8,9 @@ export interface AgentConfig {
   agentTokenFile: string | null;
   instanceId: string;
   collectorsDir: string;
+  containerRuntime: "docker" | "podman" | null;
+  kubectlBin: string;
+  kubeconfigPath: string | null;
   capabilities: string[];
   pollIntervalMs: number;
   maxBackoffMs: number;
@@ -44,6 +47,12 @@ export interface RuntimeCapabilityCheck {
   reason: string;
 }
 
+export interface RuntimeEnvironmentHints {
+  kubectlBin: string;
+  kubeconfigPath: string | null;
+  containerRuntime: "docker" | "podman" | null;
+}
+
 function hasExecutableOnPath(name: string): boolean {
   const pathValue = process.env.PATH ?? "";
   for (const dir of pathValue.split(delimiter)) {
@@ -59,7 +68,8 @@ function collectorsScriptExists(collectorsDir: string, script: string): boolean 
 
 export function runtimeCapabilityChecksForEnvironment(
   collectorsDir: string,
-  artifactFileOverride: string | null
+  artifactFileOverride: string | null,
+  hints: RuntimeEnvironmentHints
 ): RuntimeCapabilityCheck[] {
   if (artifactFileOverride) {
     return [
@@ -92,8 +102,7 @@ export function runtimeCapabilityChecksForEnvironment(
     collectorsDir,
     "collect-kubernetes-bundle.sh"
   );
-  const kubectlBin = process.env.SIGNALFORGE_KUBECTL_BIN?.trim() || "kubectl";
-  const hasKubectl = hasExecutableOnPath(kubectlBin);
+  const hasKubectl = hasExecutableOnPath(hints.kubectlBin);
 
   return [
     {
@@ -107,7 +116,7 @@ export function runtimeCapabilityChecksForEnvironment(
       enabled: hasContainerScript && (hasDocker || hasPodman),
       reason:
         !hasContainerScript ? "missing collect-container-diagnostics.sh in collectors dir"
-        : hasDocker || hasPodman ? `runtime binary found (${hasDocker ? "docker" : "podman"})`
+        : hints.containerRuntime ? `runtime binary found (${hints.containerRuntime})`
         : "missing container runtime binary on PATH (docker or podman)",
     },
     {
@@ -115,18 +124,22 @@ export function runtimeCapabilityChecksForEnvironment(
       enabled: hasKubernetesScript && hasKubectl,
       reason:
         !hasKubernetesScript ? "missing collect-kubernetes-bundle.sh in collectors dir"
-        : hasKubectl ? `kubectl binary found (${kubectlBin})`
-        : `missing kubectl binary on PATH (${kubectlBin})`,
+        : hasKubectl ?
+          hints.kubeconfigPath ?
+            `kubectl binary found (${hints.kubectlBin}); kubeconfig set (${hints.kubeconfigPath})`
+          : `kubectl binary found (${hints.kubectlBin}); using ambient/default kube context`
+        : `missing kubectl binary on PATH (${hints.kubectlBin})`,
     },
   ];
 }
 
 function defaultCapabilitiesForEnvironment(
   collectorsDir: string,
-  artifactFileOverride: string | null
+  artifactFileOverride: string | null,
+  hints: RuntimeEnvironmentHints
 ): string[] {
   return [
-    ...runtimeCapabilityChecksForEnvironment(collectorsDir, artifactFileOverride)
+    ...runtimeCapabilityChecksForEnvironment(collectorsDir, artifactFileOverride, hints)
       .filter((check) => check.enabled)
       .map((check) => check.capability),
     "upload:multipart",
@@ -180,6 +193,27 @@ function loadAgentToken(): {
   };
 }
 
+function loadRuntimeEnvironmentHints(): RuntimeEnvironmentHints {
+  const kubectlBin = process.env.SIGNALFORGE_KUBECTL_BIN?.trim() || "kubectl";
+  const kubeconfigRaw =
+    process.env.SIGNALFORGE_KUBECONFIG?.trim() || process.env.KUBECONFIG?.trim() || "";
+  const kubeconfigPath = kubeconfigRaw ? resolve(kubeconfigRaw) : null;
+  if (kubeconfigPath && !existsSync(kubeconfigPath)) {
+    throw new ConfigError(`Configured kubeconfig does not exist: ${kubeconfigPath}`);
+  }
+  if (kubeconfigPath) {
+    process.env.KUBECONFIG = kubeconfigPath;
+  }
+  return {
+    kubectlBin,
+    kubeconfigPath,
+    containerRuntime:
+      hasExecutableOnPath("docker") ? "docker"
+      : hasExecutableOnPath("podman") ? "podman"
+      : null,
+  };
+}
+
 /**
  * Load config from environment. Uses SIGNALFORGE_URL or SIGNALFORGE_BASE_URL.
  */
@@ -193,6 +227,7 @@ export function loadConfig(): AgentConfig {
 
   const token = loadAgentToken();
   const instanceId = requireEnv("SIGNALFORGE_AGENT_INSTANCE_ID");
+  const runtimeHints = loadRuntimeEnvironmentHints();
 
   const override = process.env.SIGNALFORGE_AGENT_ARTIFACT_FILE?.trim() || null;
   let collectorsDir = process.env.SIGNALFORGE_COLLECTORS_DIR?.trim() || "";
@@ -247,7 +282,7 @@ export function loadConfig(): AgentConfig {
   const capabilities =
     capabilitiesRaw ?
       parseCapabilityList(capabilitiesRaw)
-    : defaultCapabilitiesForEnvironment(collectorsDir, override);
+    : defaultCapabilitiesForEnvironment(collectorsDir, override, runtimeHints);
   if (capabilities.length === 0) {
     throw new ConfigError("SIGNALFORGE_AGENT_CAPABILITIES must not be empty");
   }
@@ -271,6 +306,9 @@ export function loadConfig(): AgentConfig {
     agentTokenFile: token.tokenFile,
     instanceId,
     collectorsDir,
+    containerRuntime: runtimeHints.containerRuntime,
+    kubectlBin: runtimeHints.kubectlBin,
+    kubeconfigPath: runtimeHints.kubeconfigPath,
     capabilities,
     pollIntervalMs,
     maxBackoffMs,

@@ -53,6 +53,8 @@ All configuration is **environment variables** (see `.env.example`).
 | `SIGNALFORGE_POLL_INTERVAL_MS` | no | Default `30000`; minimum `1000`; base sleep after gate paths and claim conflicts in `run` mode |
 | `SIGNALFORGE_MAX_BACKOFF_MS` | no | Default `300000`; minimum `1000`; ceiling for exponential backoff on transient network or 5xx/429 API failures in `run` mode |
 | `SIGNALFORGE_JOBS_WAIT_SECONDS` | no | Default `20`; max `20`; bounded long-poll window for `GET /api/agent/jobs/next` in `run` mode |
+| `SIGNALFORGE_KUBECTL_BIN` | no | Override the `kubectl` binary name or path used for capability detection and preflight |
+| `SIGNALFORGE_KUBECONFIG` | no | Explicit kubeconfig path for a hardened Kubernetes-capable runner; preferred over ambient user context |
 | `SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS` | no | Default `45000`; minimum `1000` — interval for mid-job lease heartbeats while collecting |
 | `SIGNALFORGE_AGENT_ARTIFACT_FILE` | no | If set, **skip** collector dispatch and upload this file (tests / air-gapped) |
 | `SIGNALFORGE_AGENT_VERSION` | no | Sent as `agent_version` on heartbeat (default: package version) |
@@ -144,6 +146,8 @@ Recommended flow:
 ```bash
 cp contrib/systemd/signalforge-agent.env.example contrib/systemd/signalforge-agent.env
 cp contrib/systemd/signalforge-agent.token.example contrib/systemd/signalforge-agent.token
+# Optional for a Kubernetes-capable runner:
+# cp /secure/path/kubeconfig contrib/systemd/signalforge-agent.kubeconfig
 $EDITOR contrib/systemd/signalforge-agent.env
 $EDITOR contrib/systemd/signalforge-agent.token
 sudo ./scripts/install-systemd-service.sh
@@ -153,7 +157,9 @@ The installer:
 
 - copies your env file to `/etc/signalforge-agent.env`
 - copies the token to `/etc/signalforge-agent/token`
+- optionally copies `contrib/systemd/signalforge-agent.kubeconfig` to `/etc/signalforge-agent/kubeconfig`
 - strips any inline token from the installed env file
+- writes `SIGNALFORGE_KUBECONFIG=/etc/signalforge-agent/kubeconfig` into the installed env file when that managed kubeconfig is present
 - renders the service with the current checkout path, user, absolute Bun binary, and a `LoadCredential=` token mount
 - runs a `preflight --quiet` gate before `ExecStart`
 - then runs:
@@ -187,11 +193,13 @@ Container diagnostics host:
 - use a dedicated runner host or the runtime host itself
 - grant only the runtime access you actually need, for example `docker` or `podman`
 - treat membership that can reach the container socket as elevated trust
+- use `signalforge-agent preflight` as the service user to confirm the runtime binary is actually visible before enabling the unit
 
 Kubernetes diagnostics host:
 
 - prefer a dedicated cluster-side runner or bastion over operator laptops
 - point `KUBECONFIG` at a root-controlled service kubeconfig
+- if you use the bundled installer path, stage that kubeconfig as `contrib/systemd/signalforge-agent.kubeconfig` so it lands at `/etc/signalforge-agent/kubeconfig`
 - grant least-privilege RBAC for the bundle surfaces you collect
 - keep `kubectl` on a fixed path and verify it with `signalforge-agent preflight`
 

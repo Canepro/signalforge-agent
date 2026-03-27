@@ -4,3 +4,4 @@ node_modules/
 .DS_Store
 contrib/systemd/signalforge-agent.env
 contrib/systemd/signalforge-agent.token
+contrib/systemd/signalforge-agent.kubeconfig

@@ -34,6 +34,9 @@ function testConfig(): AgentConfig {
     agentTokenFile: null,
     instanceId: "test-instance",
     collectorsDir: "/tmp/collectors",
+    containerRuntime: null,
+    kubectlBin: "kubectl",
+    kubeconfigPath: null,
     capabilities: [
       "collect:linux-audit-log",
       "collect:container-diagnostics",

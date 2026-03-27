@@ -23,6 +23,8 @@ const KEYS = [
   "SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS",
   "SIGNALFORGE_AGENT_CAPABILITIES",
   "SIGNALFORGE_KUBECTL_BIN",
+  "SIGNALFORGE_KUBECONFIG",
+  "KUBECONFIG",
 ] as const;
 
 const ORIGINAL_PATH = process.env.PATH ?? "";
@@ -96,6 +98,30 @@ describe("loadConfig", () => {
     expect(c.agentTokenFile).toContain("token");
   });
 
+  test("loads explicit kubeconfig path and exports it to KUBECONFIG", async () => {
+    const kubeconfigPath = join(await makeTempDir("sf-agent-kubeconfig-"), "config");
+    await writeFile(kubeconfigPath, "apiVersion: v1\nkind: Config\n", "utf8");
+    process.env.SIGNALFORGE_URL = "http://localhost:3000";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_AGENT_ARTIFACT_FILE = "/tmp/x.log";
+    process.env.SIGNALFORGE_KUBECONFIG = kubeconfigPath;
+
+    const c = loadConfig();
+    expect(c.kubeconfigPath).toBe(kubeconfigPath);
+    expect(process.env.KUBECONFIG).toBe(kubeconfigPath);
+  });
+
+  test("rejects missing explicit kubeconfig path", () => {
+    process.env.SIGNALFORGE_URL = "http://localhost:3000";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_AGENT_ARTIFACT_FILE = "/tmp/x.log";
+    process.env.SIGNALFORGE_KUBECONFIG = "/tmp/does-not-exist-kubeconfig";
+
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
   test("parses optional capability set", () => {
     process.env.SIGNALFORGE_URL = "http://x";
     process.env.SIGNALFORGE_AGENT_TOKEN = "t";
@@ -131,6 +157,7 @@ describe("loadConfig", () => {
       "collect:kubernetes-bundle",
       "upload:multipart",
     ]);
+    expect(loadConfig().containerRuntime).toBe("podman");
   });
 
   test("does not advertise container collection without a runtime binary", async () => {
@@ -229,7 +256,13 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
     process.env.PATH = "";
     process.env.SIGNALFORGE_KUBECTL_BIN = "kubectl";
 
-    expect(runtimeCapabilityChecksForEnvironment(collectorsDir, null)).toEqual([
+    expect(
+      runtimeCapabilityChecksForEnvironment(collectorsDir, null, {
+        kubectlBin: "kubectl",
+        kubeconfigPath: null,
+        containerRuntime: null,
+      })
+    ).toEqual([
       {
         capability: "collect:linux-audit-log",
         enabled: true,
@@ -244,6 +277,41 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         capability: "collect:kubernetes-bundle",
         enabled: false,
         reason: "missing kubectl binary on PATH (kubectl)",
+      },
+    ]);
+  });
+
+  test("reports explicit kubeconfig in kubernetes readiness reason", async () => {
+    const collectorsDir = await makeTempDir("sf-agent-collectors-");
+    const binDir = await makeTempDir("sf-agent-bin-");
+    const kubeconfigPath = join(await makeTempDir("sf-agent-kubeconfig-"), "config");
+    await writeExecutable(join(collectorsDir, "collect-kubernetes-bundle.sh"));
+    await writeExecutable(join(binDir, "kubectl"));
+    await writeFile(kubeconfigPath, "apiVersion: v1\nkind: Config\n", "utf8");
+
+    process.env.PATH = binDir;
+
+    expect(
+      runtimeCapabilityChecksForEnvironment(collectorsDir, null, {
+        kubectlBin: "kubectl",
+        kubeconfigPath,
+        containerRuntime: null,
+      })
+    ).toEqual([
+      {
+        capability: "collect:linux-audit-log",
+        enabled: false,
+        reason: "missing first-audit.sh in collectors dir",
+      },
+      {
+        capability: "collect:container-diagnostics",
+        enabled: false,
+        reason: "missing collect-container-diagnostics.sh in collectors dir",
+      },
+      {
+        capability: "collect:kubernetes-bundle",
+        enabled: true,
+        reason: `kubectl binary found (kubectl); kubeconfig set (${kubeconfigPath})`,
       },
     ]);
   });
