@@ -8,9 +8,26 @@ Type=simple
 User=__SIGNALFORGE_AGENT_USER__
 WorkingDirectory=__SIGNALFORGE_AGENT_WORKDIR__
 EnvironmentFile=__SIGNALFORGE_AGENT_ENV_FILE__
+Environment=NODE_ENV=production
+Environment=SIGNALFORGE_AGENT_TOKEN_FILE=%d/signalforge_agent_token
+LoadCredential=signalforge_agent_token:__SIGNALFORGE_AGENT_TOKEN_FILE__
+ExecStartPre=__SIGNALFORGE_AGENT_BUN__ run src/cli.ts preflight --quiet
 ExecStart=__SIGNALFORGE_AGENT_BUN__ run src/cli.ts run
 Restart=always
 RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+KillMode=control-group
+TimeoutStopSec=20
 
 [Install]
 WantedBy=multi-user.target

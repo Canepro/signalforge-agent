@@ -6,13 +6,19 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEMPLATE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.service"
 ENV_EXAMPLE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.env.example"
 ENV_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.env"
+TOKEN_EXAMPLE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.token.example"
+TOKEN_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.token"
+KUBECONFIG_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.kubeconfig"
 
 SERVICE_NAME="signalforge-agent"
 SERVICE_TARGET_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 ENV_TARGET_PATH="/etc/${SERVICE_NAME}.env"
+TOKEN_TARGET_PATH="/etc/${SERVICE_NAME}/token"
+KUBECONFIG_TARGET_PATH="/etc/${SERVICE_NAME}/kubeconfig"
 AGENT_USER="${SUDO_USER:-$(id -un)}"
 WORKDIR="$REPO_DIR"
 BUN_BIN=""
+DRY_RUN=0
 
 usage() {
   cat <<EOF
@@ -24,8 +30,13 @@ Options:
   --workdir <path>       signalforge-agent checkout path (default: ${WORKDIR})
   --env-source <path>    repo-local env file to install (default: ${ENV_SOURCE_PATH})
   --env-target <path>    installed env file path (default: ${ENV_TARGET_PATH})
+  --token-source <path>  repo-local token file to install (default: ${TOKEN_SOURCE_PATH})
+  --token-target <path>  installed token file path (default: ${TOKEN_TARGET_PATH})
+  --kubeconfig-source <path> optional repo-local kubeconfig to install (default: ${KUBECONFIG_SOURCE_PATH})
+  --kubeconfig-target <path> installed kubeconfig path (default: ${KUBECONFIG_TARGET_PATH})
   --service-name <name>  systemd unit name without .service (default: ${SERVICE_NAME})
   --bun <path>           absolute bun binary path (default: auto-detect)
+  --dry-run              render into a temporary staging root and skip systemctl
   --help                 show this help
 
 Workflow:
@@ -53,15 +64,37 @@ while [[ $# -gt 0 ]]; do
       ENV_TARGET_PATH="$2"
       shift 2
       ;;
+    --token-source)
+      TOKEN_SOURCE_PATH="$2"
+      shift 2
+      ;;
+    --token-target)
+      TOKEN_TARGET_PATH="$2"
+      shift 2
+      ;;
+    --kubeconfig-source)
+      KUBECONFIG_SOURCE_PATH="$2"
+      shift 2
+      ;;
+    --kubeconfig-target)
+      KUBECONFIG_TARGET_PATH="$2"
+      shift 2
+      ;;
     --service-name)
       SERVICE_NAME="$2"
       SERVICE_TARGET_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
       ENV_TARGET_PATH="/etc/${SERVICE_NAME}.env"
+      TOKEN_TARGET_PATH="/etc/${SERVICE_NAME}/token"
+      KUBECONFIG_TARGET_PATH="/etc/${SERVICE_NAME}/kubeconfig"
       shift 2
       ;;
     --bun)
       BUN_BIN="$2"
       shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
       ;;
     --help|-h)
       usage
@@ -75,7 +108,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$(id -u)" -ne 0 ]]; then
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  STAGING_ROOT="$(mktemp -d)"
+  trap 'rm -rf "$STAGING_ROOT"' EXIT
+  SERVICE_TARGET_PATH="${STAGING_ROOT}/etc/systemd/system/${SERVICE_NAME}.service"
+  ENV_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}.env"
+  TOKEN_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}/token"
+  KUBECONFIG_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}/kubeconfig"
+fi
+
+if [[ "$DRY_RUN" -ne 1 && "$(id -u)" -ne 0 ]]; then
   echo "Run as root, for example: sudo ./scripts/install-systemd-service.sh" >&2
   exit 1
 fi
@@ -103,8 +145,13 @@ fi
 if [[ ! -f "$ENV_SOURCE_PATH" ]]; then
   cp "$ENV_EXAMPLE_PATH" "$ENV_SOURCE_PATH"
   chmod 600 "$ENV_SOURCE_PATH"
+  if [[ ! -f "$TOKEN_SOURCE_PATH" ]]; then
+    cp "$TOKEN_EXAMPLE_PATH" "$TOKEN_SOURCE_PATH"
+    chmod 600 "$TOKEN_SOURCE_PATH"
+  fi
   echo "Created $ENV_SOURCE_PATH from example."
-  echo "Fill in SIGNALFORGE_AGENT_TOKEN and confirm the paths, then rerun this installer."
+  echo "Created $TOKEN_SOURCE_PATH from example."
+  echo "Fill in the token and confirm the paths, then rerun this installer."
   exit 0
 fi
 
@@ -115,7 +162,6 @@ set +a
 
 required_vars=(
   SIGNALFORGE_URL
-  SIGNALFORGE_AGENT_TOKEN
   SIGNALFORGE_AGENT_INSTANCE_ID
   SIGNALFORGE_COLLECTORS_DIR
 )
@@ -127,23 +173,63 @@ for name in "${required_vars[@]}"; do
   fi
 done
 
-mkdir -p "$(dirname "$SERVICE_TARGET_PATH")" "$(dirname "$ENV_TARGET_PATH")"
-install -m 600 "$ENV_SOURCE_PATH" "$ENV_TARGET_PATH"
+TOKEN_VALUE=""
+if [[ -f "$TOKEN_SOURCE_PATH" ]]; then
+  TOKEN_VALUE="$(tr -d '\r' < "$TOKEN_SOURCE_PATH" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+fi
+if [[ -z "$TOKEN_VALUE" && -n "${SIGNALFORGE_AGENT_TOKEN:-}" ]]; then
+  TOKEN_VALUE="${SIGNALFORGE_AGENT_TOKEN}"
+fi
+if [[ -z "$TOKEN_VALUE" || "$TOKEN_VALUE" == "paste-enrollment-token-here" ]]; then
+  echo "Missing source-bound token. Fill ${TOKEN_SOURCE_PATH} (preferred) or set SIGNALFORGE_AGENT_TOKEN in ${ENV_SOURCE_PATH}." >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$SERVICE_TARGET_PATH")" "$(dirname "$ENV_TARGET_PATH")" "$(dirname "$TOKEN_TARGET_PATH")"
+mkdir -p "$(dirname "$KUBECONFIG_TARGET_PATH")"
+if [[ -f "$KUBECONFIG_SOURCE_PATH" && -s "$KUBECONFIG_SOURCE_PATH" ]]; then
+  grep -Ev '^[[:space:]]*(SIGNALFORGE_AGENT_TOKEN(_FILE)?|SIGNALFORGE_KUBECONFIG|KUBECONFIG)=' "$ENV_SOURCE_PATH" > "$ENV_TARGET_PATH"
+else
+  grep -Ev '^[[:space:]]*SIGNALFORGE_AGENT_TOKEN(_FILE)?=' "$ENV_SOURCE_PATH" > "$ENV_TARGET_PATH"
+fi
+chmod 600 "$ENV_TARGET_PATH"
+printf '%s\n' "$TOKEN_VALUE" > "$TOKEN_TARGET_PATH"
+chmod 600 "$TOKEN_TARGET_PATH"
+if [[ -f "$KUBECONFIG_SOURCE_PATH" && -s "$KUBECONFIG_SOURCE_PATH" ]]; then
+  install -m 600 "$KUBECONFIG_SOURCE_PATH" "$KUBECONFIG_TARGET_PATH"
+  printf '\nSIGNALFORGE_KUBECONFIG=%s\n' "$KUBECONFIG_TARGET_PATH" >> "$ENV_TARGET_PATH"
+fi
 
 sed \
   -e "s|__SIGNALFORGE_AGENT_USER__|${AGENT_USER}|g" \
   -e "s|__SIGNALFORGE_AGENT_WORKDIR__|${WORKDIR}|g" \
   -e "s|__SIGNALFORGE_AGENT_ENV_FILE__|${ENV_TARGET_PATH}|g" \
+  -e "s|__SIGNALFORGE_AGENT_TOKEN_FILE__|${TOKEN_TARGET_PATH}|g" \
   -e "s|__SIGNALFORGE_AGENT_BUN__|${BUN_BIN}|g" \
   "$TEMPLATE_PATH" > "$SERVICE_TARGET_PATH"
 
 chmod 644 "$SERVICE_TARGET_PATH"
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "Dry-run complete."
+  echo "Rendered ${SERVICE_TARGET_PATH}"
+  echo "Rendered ${ENV_TARGET_PATH}"
+  echo "Rendered ${TOKEN_TARGET_PATH}"
+  if [[ -f "$KUBECONFIG_TARGET_PATH" ]]; then
+    echo "Rendered ${KUBECONFIG_TARGET_PATH}"
+  fi
+  exit 0
+fi
 
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}"
 
 echo "Installed ${SERVICE_TARGET_PATH}"
 echo "Installed ${ENV_TARGET_PATH}"
+echo "Installed ${TOKEN_TARGET_PATH}"
+if [[ -f "$KUBECONFIG_TARGET_PATH" ]]; then
+  echo "Installed ${KUBECONFIG_TARGET_PATH}"
+fi
 echo
 echo "Check status:"
 echo "  systemctl status ${SERVICE_NAME}"

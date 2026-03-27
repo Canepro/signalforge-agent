@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { unlink } from "node:fs/promises";
-import { AuthError, createClient, type FetchLike } from "../src/api.ts";
+import {
+  ApiError,
+  AuthError,
+  createClient,
+  isRetryableApiFailure,
+  type FetchLike,
+} from "../src/api.ts";
 
 describe("SignalForgeAgentClient", () => {
   test("401 becomes AuthError with body text", async () => {
@@ -77,5 +83,28 @@ describe("SignalForgeAgentClient", () => {
     }
     expect(seenArtifactType).toBe("container-diagnostics");
     expect(seenInstanceId).toBe("inst-1");
+  });
+
+  test("jobsNext rejects malformed job rows", async () => {
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          jobs: [{ id: "job-1" }],
+          gate: null,
+        }),
+        { status: 200 }
+      );
+    const client = createClient("http://localhost:3000", "tok", fetchImpl);
+    await expect(client.jobsNext(1)).rejects.toThrow(/malformed job entry/);
+  });
+
+  test("retryable API failures exclude arbitrary local errors", () => {
+    expect(
+      isRetryableApiFailure(
+        new ApiError("GET", "/api/agent/jobs/next", 503, "unavailable", null)
+      )
+    ).toBe(true);
+    expect(isRetryableApiFailure(new TypeError("fetch failed"))).toBe(true);
+    expect(isRetryableApiFailure(new Error("programmer bug"))).toBe(false);
   });
 });

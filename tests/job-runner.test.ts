@@ -30,8 +30,14 @@ function testConfig(): AgentConfig {
   return {
     baseUrl: "http://localhost:3000",
     agentToken: "test-token",
+    agentTokenSource: "env",
+    agentTokenFile: null,
     instanceId: "test-instance",
     collectorsDir: "/tmp/collectors",
+    containerRuntime: null,
+    containerRuntimeReason: "missing container runtime binary on PATH (docker or podman)",
+    kubectlBin: "kubectl",
+    kubeconfigPath: null,
     capabilities: [
       "collect:linux-audit-log",
       "collect:container-diagnostics",
@@ -39,6 +45,7 @@ function testConfig(): AgentConfig {
       "upload:multipart",
     ],
     pollIntervalMs: 30_000,
+    maxBackoffMs: 300_000,
     jobsWaitSeconds: 20,
     artifactFileOverride: null,
     agentVersion: "0.1.0-test",
@@ -395,6 +402,90 @@ EOF
     } finally {
       await unlink(scriptPath).catch(() => undefined);
       await unlink(producedPath).catch(() => undefined);
+      await rm(collectorsDir, { recursive: true, force: true });
+    }
+  });
+
+  test("passes jobs/next collection_scope through to collector invocation", async () => {
+    const jobId = "66666666-6666-6666-6666-666666666666";
+    const collectorsDir = await mkdtemp(join(tmpdir(), "sf-agent-k8s-collectors-"));
+    const scriptPath = join(collectorsDir, "collect-kubernetes-bundle.sh");
+    const producedPath = join(
+      collectorsDir,
+      "kubernetes_bundle_payments_20260326_101500.json"
+    );
+    const argsPath = join(collectorsDir, "collector-args.txt");
+    await writeFile(
+      scriptPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" > "${argsPath}"
+printf '{}\n' > "${producedPath}"
+`,
+      "utf8"
+    );
+
+    const fetchImpl: FetchLike = async (input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/agent/heartbeat") && method === "POST") {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/api/agent/jobs/next")) {
+        return new Response(
+          JSON.stringify({
+            jobs: [
+              {
+                id: jobId,
+                artifact_type: "kubernetes-bundle",
+                collection_scope: {
+                  kind: "kubernetes_scope",
+                  scope_level: "namespace",
+                  namespace: "payments",
+                  kubectl_context: "prod-eu-1",
+                  cluster_name: "aks-prod-eu-1",
+                  provider: "aks",
+                },
+              },
+            ],
+            gate: null,
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("/claim")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/start")) {
+        return new Response(JSON.stringify({ id: jobId }), { status: 200 });
+      }
+      if (url.includes("/artifact")) {
+        return new Response(JSON.stringify({ run_id: "run-2", artifact_id: "art-2" }), {
+          status: 200,
+        });
+      }
+      if (url.includes("/fail")) {
+        return new Response("unexpected fail", { status: 500 });
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    const cfg = {
+      ...testConfig(),
+      collectorsDir,
+    };
+
+    try {
+      const r = await runSingleCycle(cfg, fetchImpl);
+      expect(r).toEqual({ kind: "processed", jobId });
+      const args = await Bun.file(argsPath).text();
+      expect(args).toContain(
+        "--scope namespace --namespace payments --context prod-eu-1 --cluster-name aks-prod-eu-1 --provider aks"
+      );
+    } finally {
+      await unlink(scriptPath).catch(() => undefined);
+      await unlink(producedPath).catch(() => undefined);
+      await unlink(argsPath).catch(() => undefined);
       await rm(collectorsDir, { recursive: true, force: true });
     }
   });

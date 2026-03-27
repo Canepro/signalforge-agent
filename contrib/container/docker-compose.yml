@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  signalforge-agent:
+    image: signalforge-agent:local
+    restart: unless-stopped
+    read_only: true
+    env_file:
+      - ./signalforge-agent.container.env
+    environment:
+      SIGNALFORGE_AGENT_TOKEN_FILE: /run/signalforge-agent/token
+      SIGNALFORGE_AGENT_CAPABILITIES: collect:container-diagnostics,upload:multipart
+    volumes:
+      - ./signalforge-agent.container.token:/run/signalforge-agent/token:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    tmpfs:
+      - /work
+    command: ["run"]
