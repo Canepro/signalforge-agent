@@ -196,13 +196,17 @@ export async function processOneQueuedJob(
     } else {
       artifactPath =
         artifactType === "linux-audit-log" ?
-          await runFirstAuditScript(cfg.collectorsDir, { signal: leaseAbort.signal })
+          await runFirstAuditScript(cfg.collectorsDir, {
+            signal: leaseAbort.signal,
+            workdir: cfg.collectorWorkdir,
+          })
         : await runCollectorForArtifactType(
             cfg.collectorsDir,
             artifactType,
             collectionScope,
             {
               signal: leaseAbort.signal,
+              workdir: cfg.collectorWorkdir,
             }
           );
       uploadName = artifactPath.split(/[/\\]/).pop() || "artifact.log";
@@ -298,7 +302,9 @@ export async function runSingleCycle(
   fetchImpl?: FetchLike,
   options?: { waitSeconds?: number }
 ): Promise<ProcessJobResult> {
-  const client = createClient(cfg.baseUrl, cfg.agentToken, fetchImpl);
+  const client = createClient(cfg.baseUrl, cfg.agentToken, fetchImpl, {
+    uploadTransport: cfg.uploadTransport,
+  });
 
   const { gate, jobs } = await idleHeartbeatAndPoll(
     client,

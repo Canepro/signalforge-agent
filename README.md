@@ -49,6 +49,8 @@ All configuration is **environment variables** (see `.env.example`).
 | `SIGNALFORGE_AGENT_TOKEN_FILE` | yes* | File containing the bearer token. Preferred for long-running services. |
 | `SIGNALFORGE_AGENT_INSTANCE_ID` | yes | Opaque stable id for **this process**; must match claim/start/fail/artifact and lease-extension heartbeats |
 | `SIGNALFORGE_COLLECTORS_DIR` | yes* | Absolute path to **signalforge-collectors** root (family-specific collector scripts live there) |
+| `SIGNALFORGE_AGENT_WORKDIR` | no | Writable directory for collector output files. Defaults to `SIGNALFORGE_COLLECTORS_DIR`; containerized runners should usually set this to a writable volume such as `/work` |
+| `SIGNALFORGE_AGENT_UPLOAD_TRANSPORT` | no | Artifact upload transport. `fetch` by default. Use `curl` for hardened Kubernetes runners if Bun multipart upload is unreliable in that runtime |
 | `SIGNALFORGE_AGENT_CAPABILITIES` | no | Comma-separated heartbeat capabilities. When omitted, the agent derives capabilities from local readiness and always includes `upload:multipart`. Container capability now requires real Docker or Podman access, not only a binary on `PATH` |
 | `SIGNALFORGE_POLL_INTERVAL_MS` | no | Default `30000`; minimum `1000`; base sleep after gate paths and claim conflicts in `run` mode |
 | `SIGNALFORGE_MAX_BACKOFF_MS` | no | Default `300000`; minimum `1000`; ceiling for exponential backoff on transient network or 5xx/429 API failures in `run` mode |
@@ -146,6 +148,9 @@ The repo includes:
 - `contrib/container/docker-compose.yml` — reference container-host deployment for `container-diagnostics`
 - `contrib/kubernetes/deployment.yaml` — reference cluster-side deployment for `kubernetes-bundle`
 - `scripts/build-container-image.sh` — builds the reference image from sibling `signalforge-agent` and `signalforge-collectors` checkouts
+- `contrib/kubernetes/README.md` — repeatable cluster-side rollout and validation guide
+- `scripts/publish-kubernetes-image.sh` — publishes a Kubernetes-target image remotely with `az acr build`
+- `scripts/deploy-kubernetes-agent.sh` — applies the reference manifest, wires secrets, and rolls the deployment
 
 Recommended flow:
 
@@ -212,6 +217,10 @@ Across all forms:
 - pin capabilities to the family that actually makes sense for that deployment form
 - run `signalforge-agent preflight` before enabling or promoting the workload
 
+For the reference Kubernetes deployment, the manifest pins `SIGNALFORGE_AGENT_UPLOAD_TRANSPORT=curl`.
+That is the preferred cluster-side default because it has been more reliable than Bun multipart upload
+inside the hardened arm64 Kubernetes container runtime used during validation.
+
 ### Runtime-host `systemd` packaging for `container-diagnostics`
 
 When you can install a root-owned system service, this is a strong default for Podman or Docker-backed hosts because:
@@ -246,6 +255,12 @@ Build the image from sibling repo checkouts:
 
 ```bash
 ./scripts/build-container-image.sh signalforge-agent:local
+```
+
+To target a non-default CPU architecture such as an `arm64` Kubernetes cluster from an `amd64` workstation:
+
+```bash
+SIGNALFORGE_IMAGE_PLATFORM=linux/arm64 ./scripts/build-container-image.sh signalforge-agent:arm64
 ```
 
 This expects the default workspace layout:
@@ -288,24 +303,54 @@ Still validate:
 
 ### Preferred cluster-side packaging for `kubernetes-bundle`
 
-Use the bundled deployment manifest when a cluster-side runner is the right operational model:
+Use the bundled deployment manifest when a cluster-side runner is the right operational model.
+For a repeatable rollout, prefer the checked-in publish and deploy scripts instead of local
+one-off commands:
 
 ```bash
-kubectl apply -f contrib/kubernetes/deployment.yaml
+./scripts/publish-kubernetes-image.sh \
+  --registry caneprophacr01 \
+  --image signalforge-agent:oke-arm64-$(date +%Y%m%d-%H%M%S)
 ```
+
+```bash
+./scripts/deploy-kubernetes-agent.sh \
+  --image caneprophacr01.azurecr.io/signalforge-agent:oke-arm64-20260330-180000 \
+  --signalforge-url https://ca-signalforge-staging.kinddune-53ac219d.eastus2.azurecontainerapps.io \
+  --agent-token-file /secure/path/signalforge-kubernetes-agent.token \
+  --kube-context-alias oke-cluster \
+  --acr-name caneprophacr01
+```
+
+What the manifest now gives you by default:
+
+- a dedicated `signalforge` namespace for the runner itself
+- a dedicated `signalforge-agent` service account
+- a cluster-capable read-only `ClusterRole` and `ClusterRoleBinding`
+- an in-cluster kubeconfig `ConfigMap` that uses the pod's own service-account token instead of a copied external kubeconfig file
+- a writable `emptyDir` at `/work`, and `TMPDIR=/work`, because collectors emit artifacts before upload and use temporary files
 
 Before using it:
 
-- replace the placeholder token and kubeconfig secrets
-- replace the placeholder image reference if you push the built image to a registry
+- replace the placeholder SignalForge agent token secret
+- replace the placeholder image reference with your pushed agent image, or let `scripts/deploy-kubernetes-agent.sh` do that for you
+- add an image pull secret if the registry is private, or let `scripts/deploy-kubernetes-agent.sh --acr-name ...` manage it
+- build the image for the cluster node architecture, for example `linux/arm64` on arm64 OKE nodes
 - keep the capability override pinned to `collect:kubernetes-bundle,upload:multipart`
-- keep the writable `emptyDir` mounted at `/work`, because collectors emit artifacts before upload
+
+Operational stance:
+
+- the runner should live in its own dedicated namespace, not inside the monitored workload namespace
+- the runner should be cluster-capable by default so the Kubernetes bundle stays credible for platform diagnostics
+- namespace-scoped collection is still supported, but it should come from the queued `collection_scope`, not from weakening the default deployment shape
+
+See `contrib/kubernetes/README.md` for the full publish, deploy, validate, and cleanup flow.
 
 Treat this as the preferred long-running packaging form when:
 
 - you are collecting `kubernetes-bundle`
 - a cluster-side Deployment is easier to operate than a bastion or host service
-- explicit kubeconfig or future in-cluster identity is acceptable for that cluster
+- in-cluster identity is acceptable for that cluster
 
 ### Preferred host `systemd` packaging for `linux-audit-log`
 

@@ -76,4 +76,86 @@ printf '{}\n' > ./kubernetes_bundle_payments_20260326_220000.json
       "--scope namespace --namespace payments --context prod-eu-1 --cluster-name aks-prod-eu-1 --provider aks"
     );
   });
+
+  test("forwards kubeconfig and tmpdir environment to collector subprocesses", async () => {
+    const dir = await makeTempDir("sf-agent-k8s-env-");
+    const capturePath = join(dir, "env.txt");
+    await writeExecutable(
+      join(dir, "collect-kubernetes-bundle.sh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf 'KUBECONFIG=%s\nTMPDIR=%s\n' "$KUBECONFIG" "$TMPDIR" > '${capturePath}'
+printf '{}\n' > ./kubernetes_bundle_cluster_20260330_220000.json
+`
+    );
+
+    const originalKubeconfig = process.env.KUBECONFIG;
+    const originalSignalforgeKubeconfig = process.env.SIGNALFORGE_KUBECONFIG;
+    const originalTmpdir = process.env.TMPDIR;
+
+    process.env.KUBECONFIG = "";
+    process.env.SIGNALFORGE_KUBECONFIG = "/var/run/signalforge-agent/kubeconfig";
+    process.env.TMPDIR = "/work";
+
+    try {
+      const artifact = await runCollectorForArtifactType(dir, "kubernetes-bundle", {
+        kind: "kubernetes_scope",
+        scope_level: "cluster",
+        kubectl_context: "oke-cluster",
+        cluster_name: "oke-cluster",
+        provider: "oke",
+      });
+
+      expect(artifact).toContain("kubernetes_bundle_cluster_20260330_220000.json");
+      expect(await readFile(capturePath, "utf8")).toContain(
+        "KUBECONFIG=/var/run/signalforge-agent/kubeconfig\nTMPDIR=/work"
+      );
+    } finally {
+      if (originalKubeconfig === undefined) {
+        delete process.env.KUBECONFIG;
+      } else {
+        process.env.KUBECONFIG = originalKubeconfig;
+      }
+      if (originalSignalforgeKubeconfig === undefined) {
+        delete process.env.SIGNALFORGE_KUBECONFIG;
+      } else {
+        process.env.SIGNALFORGE_KUBECONFIG = originalSignalforgeKubeconfig;
+      }
+      if (originalTmpdir === undefined) {
+        delete process.env.TMPDIR;
+      } else {
+        process.env.TMPDIR = originalTmpdir;
+      }
+    }
+  });
+
+  test("uses explicit collector workdir for emitted artifacts", async () => {
+    const scriptsDir = await makeTempDir("sf-agent-k8s-scripts-");
+    const workdir = await makeTempDir("sf-agent-k8s-work-");
+    await writeExecutable(
+      join(scriptsDir, "collect-kubernetes-bundle.sh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '{}\n' > ./kubernetes_bundle_cluster_20260330_220100.json
+`
+    );
+
+    const artifact = await runCollectorForArtifactType(
+      scriptsDir,
+      "kubernetes-bundle",
+      {
+        kind: "kubernetes_scope",
+        scope_level: "cluster",
+        cluster_name: "oke-cluster",
+        provider: "oke",
+      },
+      {
+        workdir,
+      }
+    );
+
+    expect(artifact).toBe(
+      join(workdir, "kubernetes_bundle_cluster_20260330_220100.json")
+    );
+  });
 });

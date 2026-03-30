@@ -24,6 +24,7 @@ export function buildPreflightLines(cfg: AgentConfig): string[] {
   lines.push(
     `Kubeconfig: ${cfg.kubeconfigPath ?? "not set (ambient/default kubectl context)"}`
   );
+  lines.push(`Upload transport: ${cfg.uploadTransport}`);
   lines.push(`Backoff: base ${cfg.pollIntervalMs}ms, max ${cfg.maxBackoffMs}ms`);
   lines.push(`Effective capabilities: ${cfg.capabilities.join(", ")}`);
 

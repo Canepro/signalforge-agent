@@ -6,6 +6,8 @@ AGENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE_DIR="$(cd "$AGENT_DIR/.." && pwd)"
 COLLECTORS_DIR="${SIGNALFORGE_COLLECTORS_REPO:-$WORKSPACE_DIR/signalforge-collectors}"
 IMAGE_TAG="${1:-signalforge-agent:local}"
+IMAGE_PLATFORM="${SIGNALFORGE_IMAGE_PLATFORM:-}"
+TARGET_ARCH=""
 
 if [[ ! -d "$COLLECTORS_DIR" ]]; then
   echo "Missing signalforge-collectors checkout at: $COLLECTORS_DIR" >&2
@@ -18,12 +20,15 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ -n "$IMAGE_PLATFORM" ]]; then
+  TARGET_ARCH="${IMAGE_PLATFORM##*/}"
+fi
+
 BUILD_ROOT="$(mktemp -d)"
 trap 'rm -rf "$BUILD_ROOT"' EXIT
-AGENT_STAGE_DIR="$BUILD_ROOT/$(basename "$AGENT_DIR")"
 COLLECTORS_STAGE_DIR="$BUILD_ROOT/$(basename "$COLLECTORS_DIR")"
 
-mkdir -p "$AGENT_STAGE_DIR" "$COLLECTORS_STAGE_DIR"
+mkdir -p "$COLLECTORS_STAGE_DIR"
 
 tar \
   --exclude=node_modules \
@@ -37,7 +42,7 @@ tar \
   -C "$AGENT_DIR" \
   -cf - \
   . \
-  | tar -C "$AGENT_STAGE_DIR" -xf -
+  | tar -C "$BUILD_ROOT" -xf -
 
 tar \
   --exclude=node_modules \
@@ -50,9 +55,22 @@ tar \
   . \
   | tar -C "$COLLECTORS_STAGE_DIR" -xf -
 
-docker build \
-  -f "$AGENT_STAGE_DIR/contrib/container/Dockerfile" \
-  -t "$IMAGE_TAG" \
-  "$BUILD_ROOT"
+build_args=(
+  build
+  -f "$BUILD_ROOT/contrib/container/Dockerfile"
+  -t "$IMAGE_TAG"
+)
+
+if [[ -n "$IMAGE_PLATFORM" ]]; then
+  build_args+=(--platform "$IMAGE_PLATFORM")
+fi
+
+if [[ -n "$TARGET_ARCH" ]]; then
+  build_args+=(--build-arg "TARGETARCH=$TARGET_ARCH")
+fi
+
+build_args+=("$BUILD_ROOT")
+
+docker "${build_args[@]}"
 
 echo "Built $IMAGE_TAG"

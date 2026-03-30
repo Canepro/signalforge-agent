@@ -4,6 +4,26 @@
  */
 import { parseCollectionScope, type CollectionScope } from "./collection-scope.ts";
 
+export type UploadTransport = "fetch" | "curl";
+
+type CurlUploadRequest = {
+  url: string;
+  token: string;
+  filePath: string;
+  filename: string;
+  instanceId: string;
+  artifactType: string;
+};
+
+type CurlUploadResponse = {
+  status: number;
+  bodyText: string;
+};
+
+export type CurlRunner = (
+  request: CurlUploadRequest
+) => Promise<CurlUploadResponse>;
+
 export class ApiError extends Error {
   readonly method: string;
   readonly path: string;
@@ -85,11 +105,66 @@ export type AgentJobSummary = {
   collection_scope: CollectionScope | null;
 };
 
+async function defaultCurlRunner(
+  request: CurlUploadRequest
+): Promise<CurlUploadResponse> {
+  const proc = Bun.spawn(
+    [
+      "curl",
+      "-sS",
+      "-X",
+      "POST",
+      "-H",
+      `Authorization: Bearer ${request.token}`,
+      "-F",
+      `file=@${request.filePath};filename=${request.filename}`,
+      "--form-string",
+      `instance_id=${request.instanceId}`,
+      "--form-string",
+      `artifact_type=${request.artifactType}`,
+      "-w",
+      "\\n%{http_code}",
+      request.url,
+    ],
+    {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    }
+  );
+
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+
+  if (exitCode !== 0) {
+    const detail = stderr.trim() || `curl exited with code ${exitCode}`;
+    throw new Error(`curl upload failed: ${detail}`);
+  }
+
+  const splitAt = stdout.lastIndexOf("\n");
+  if (splitAt === -1) {
+    throw new Error("curl upload failed: missing HTTP status trailer");
+  }
+  const bodyText = stdout.slice(0, splitAt);
+  const statusText = stdout.slice(splitAt + 1).trim();
+  const status = Number.parseInt(statusText, 10);
+  if (!Number.isFinite(status)) {
+    throw new Error(`curl upload failed: invalid HTTP status trailer "${statusText}"`);
+  }
+
+  return { status, bodyText };
+}
+
 export class SignalForgeAgentClient {
   constructor(
     private readonly baseUrl: string,
     private readonly token: string,
-    private readonly fetchImpl: FetchLike
+    private readonly fetchImpl: FetchLike,
+    private readonly uploadTransport: UploadTransport,
+    private readonly curlRunner: CurlRunner
   ) {}
 
   private authHeaders(contentTypeJson: boolean): HeadersInit {
@@ -203,30 +278,50 @@ export class SignalForgeAgentClient {
     filePath: string,
     filename: string
   ): Promise<Record<string, unknown>> {
-    const url = `${this.baseUrl}/api/collection-jobs/${jobId}/artifact`;
-    const file = Bun.file(filePath);
-    const form = new FormData();
-    form.set("file", file, filename);
-    form.set("instance_id", instanceId);
-    form.set("artifact_type", artifactType);
+    const path = `/api/collection-jobs/${jobId}/artifact`;
+    const url = `${this.baseUrl}${path}`;
 
-    const res = await this.fetchImpl(url, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.token}`,
-      },
-      body: form,
-    });
-    const text = await res.text();
-    const json = parseJsonSafe(text);
-    if (res.status === 401) {
-      throw new AuthError("POST", `/api/collection-jobs/${jobId}/artifact`, res.status, text, json);
+    let status: number;
+    let text: string;
+
+    if (this.uploadTransport === "curl") {
+      const response = await this.curlRunner({
+        url,
+        token: this.token,
+        filePath,
+        filename,
+        instanceId,
+        artifactType,
+      });
+      status = response.status;
+      text = response.bodyText;
+    } else {
+      const file = Bun.file(filePath);
+      const form = new FormData();
+      form.set("file", file, filename);
+      form.set("instance_id", instanceId);
+      form.set("artifact_type", artifactType);
+
+      const res = await this.fetchImpl(url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.token}`,
+        },
+        body: form,
+      });
+      status = res.status;
+      text = await res.text();
     }
-    if (!res.ok) {
+
+    const json = parseJsonSafe(text);
+    if (status === 401) {
+      throw new AuthError("POST", path, status, text, json);
+    }
+    if (status < 200 || status >= 300) {
       throw new ApiError(
         "POST",
-        `/api/collection-jobs/${jobId}/artifact`,
-        res.status,
+        path,
+        status,
         text,
         json
       );
@@ -238,7 +333,17 @@ export class SignalForgeAgentClient {
 export function createClient(
   baseUrl: string,
   token: string,
-  fetchImpl: FetchLike = globalThis.fetch.bind(globalThis)
+  fetchImpl: FetchLike = globalThis.fetch.bind(globalThis),
+  options: {
+    uploadTransport?: UploadTransport;
+    curlRunner?: CurlRunner;
+  } = {}
 ): SignalForgeAgentClient {
-  return new SignalForgeAgentClient(baseUrl, token, fetchImpl);
+  return new SignalForgeAgentClient(
+    baseUrl,
+    token,
+    fetchImpl,
+    options.uploadTransport ?? "fetch",
+    options.curlRunner ?? defaultCurlRunner
+  );
 }

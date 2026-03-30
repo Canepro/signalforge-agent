@@ -20,6 +20,7 @@ const KEYS = [
   "SIGNALFORGE_JOBS_WAIT_SECONDS",
   "SIGNALFORGE_AGENT_ARTIFACT_FILE",
   "SIGNALFORGE_AGENT_VERSION",
+  "SIGNALFORGE_AGENT_UPLOAD_TRANSPORT",
   "SIGNALFORGE_AGENT_LEASE_HEARTBEAT_MS",
   "SIGNALFORGE_AGENT_CAPABILITIES",
   "SIGNALFORGE_KUBECTL_BIN",
@@ -82,7 +83,26 @@ describe("loadConfig", () => {
     expect(c.artifactFileOverride).toContain("x.log");
     expect(c.leaseHeartbeatMs).toBe(45_000);
     expect(c.maxBackoffMs).toBe(300_000);
+    expect(c.uploadTransport).toBe("fetch");
     expect(c.capabilities).toEqual(["upload:multipart"]);
+  });
+
+  test("parses optional upload transport", () => {
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
+    process.env.SIGNALFORGE_AGENT_UPLOAD_TRANSPORT = "curl";
+    expect(loadConfig().uploadTransport).toBe("curl");
+  });
+
+  test("rejects invalid upload transport", () => {
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
+    process.env.SIGNALFORGE_AGENT_UPLOAD_TRANSPORT = "scp";
+    expect(() => loadConfig()).toThrow(ConfigError);
   });
 
   test("loads token from SIGNALFORGE_AGENT_TOKEN_FILE", async () => {

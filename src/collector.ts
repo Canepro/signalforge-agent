@@ -125,17 +125,27 @@ async function runCollectorScript(
   collectorsDir: string,
   artifactType: ArtifactType,
   collectionScope: CollectionScope | null,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal; workdir?: string }
 ): Promise<string> {
   const spec = collectorSpecForArtifactType(artifactType);
-  const before = await snapshotMatchingFiles(collectorsDir, spec.producedFileRe);
-  const proc = Bun.spawn(collectorCommandForArtifactType(spec.script, artifactType, collectionScope), {
-    cwd: collectorsDir,
-    stdout: "inherit",
-    stderr: "inherit",
-    stdin: "ignore",
-    signal: options?.signal,
-  });
+  const collectorWorkdir = options?.workdir ?? collectorsDir;
+  const before = await snapshotMatchingFiles(collectorWorkdir, spec.producedFileRe);
+  const collectorEnv = { ...process.env };
+  if (!collectorEnv.KUBECONFIG && collectorEnv.SIGNALFORGE_KUBECONFIG) {
+    collectorEnv.KUBECONFIG = collectorEnv.SIGNALFORGE_KUBECONFIG;
+  }
+  const scriptPath = join(collectorsDir, spec.script);
+  const proc = Bun.spawn(
+    collectorCommandForArtifactType(scriptPath, artifactType, collectionScope),
+    {
+      cwd: collectorWorkdir,
+      env: collectorEnv,
+      stdout: "inherit",
+      stderr: "inherit",
+      stdin: "ignore",
+      signal: options?.signal,
+    }
+  );
   let code: number;
   try {
     code = await proc.exited;
@@ -150,7 +160,7 @@ async function runCollectorScript(
   }
 
   const produced = await pickProducedMatchingFile(
-    collectorsDir,
+    collectorWorkdir,
     before,
     spec.producedFileRe
   );
@@ -168,7 +178,7 @@ async function runCollectorScript(
  */
 export async function runFirstAuditScript(
   collectorsDir: string,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal; workdir?: string }
 ): Promise<string> {
   return runCollectorScript(collectorsDir, "linux-audit-log", null, options);
 }
@@ -185,17 +195,17 @@ export async function runCollectorForArtifactType(
   collectorsDir: string,
   artifactType: ArtifactType,
   collectionScope: CollectionScope | null,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal; workdir?: string }
 ): Promise<string> {
   return runCollectorScript(collectorsDir, artifactType, collectionScope, options);
 }
 
 function collectorCommandForArtifactType(
-  script: string,
+  scriptPath: string,
   artifactType: ArtifactType,
   collectionScope: CollectionScope | null
 ): string[] {
-  const cmd = ["bash", script];
+  const cmd = ["bash", scriptPath];
 
   if (artifactType === "linux-audit-log") {
     if (collectionScope && collectionScope.kind !== "linux_host") {

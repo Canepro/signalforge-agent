@@ -1,8 +1,9 @@
-FROM oven/bun:1
+FROM docker.io/oven/bun:1
 
 USER root
 
 ARG KUBECTL_VERSION=v1.33.1
+ARG TARGETARCH=amd64
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -14,15 +15,15 @@ RUN apt-get update \
     python3 \
   && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl \
+RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" -o /usr/local/bin/kubectl \
   && chmod +x /usr/local/bin/kubectl
 
 WORKDIR /opt/signalforge/signalforge-agent
 
-COPY signalforge-agent/package.json signalforge-agent/bun.lock ./
+COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
-COPY signalforge-agent /opt/signalforge/signalforge-agent
+COPY src /opt/signalforge/signalforge-agent/src
 COPY signalforge-collectors /opt/signalforge/signalforge-collectors
 
 RUN chmod +x \

@@ -85,6 +85,53 @@ describe("SignalForgeAgentClient", () => {
     expect(seenInstanceId).toBe("inst-1");
   });
 
+  test("curl upload transport sends artifact metadata and parses JSON response", async () => {
+    let seenRequest:
+      | {
+          url: string;
+          token: string;
+          filePath: string;
+          filename: string;
+          instanceId: string;
+          artifactType: string;
+        }
+      | undefined;
+
+    const client = createClient(
+      "http://localhost:3000",
+      "tok",
+      async () => new Response("unexpected fetch path", { status: 500 }),
+      {
+        uploadTransport: "curl",
+        curlRunner: async (request) => {
+          seenRequest = request;
+          return {
+            status: 200,
+            bodyText: JSON.stringify({ run_id: "run-2", artifact_id: "art-2" }),
+          };
+        },
+      }
+    );
+
+    const response = await client.uploadArtifact(
+      "job-2",
+      "inst-2",
+      "kubernetes-bundle",
+      "/tmp/fake-bundle.json",
+      "bundle.json"
+    );
+
+    expect(response.run_id).toBe("run-2");
+    expect(seenRequest).toEqual({
+      url: "http://localhost:3000/api/collection-jobs/job-2/artifact",
+      token: "tok",
+      filePath: "/tmp/fake-bundle.json",
+      filename: "bundle.json",
+      instanceId: "inst-2",
+      artifactType: "kubernetes-bundle",
+    });
+  });
+
   test("jobsNext rejects malformed job rows", async () => {
     const fetchImpl = async () =>
       new Response(

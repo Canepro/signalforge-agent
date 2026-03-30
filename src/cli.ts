@@ -56,6 +56,7 @@ Environment (see .env.example):
   SIGNALFORGE_KUBECONFIG                Optional; explicit kubeconfig path for the service
   SIGNALFORGE_AGENT_ARTIFACT_FILE        Optional; upload file instead of running collector
   SIGNALFORGE_AGENT_VERSION              Optional; reported to heartbeat (default ${VERSION})
+  SIGNALFORGE_AGENT_UPLOAD_TRANSPORT     Optional; fetch or curl (default fetch)
 
 Exit codes (once mode):
   0 success (job processed, or no queued job)

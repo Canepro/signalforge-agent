@@ -34,6 +34,7 @@ function testConfig(): AgentConfig {
     agentTokenFile: null,
     instanceId: "test-instance",
     collectorsDir: "/tmp/collectors",
+    collectorWorkdir: tmpdir(),
     containerRuntime: null,
     containerRuntimeReason: "missing container runtime binary on PATH (docker or podman)",
     kubectlBin: "kubectl",
@@ -49,6 +50,7 @@ function testConfig(): AgentConfig {
     jobsWaitSeconds: 20,
     artifactFileOverride: null,
     agentVersion: "0.1.0-test",
+    uploadTransport: "fetch",
     leaseHeartbeatMs: 45_000,
   };
 }
@@ -317,9 +319,10 @@ describe("runSingleCycle", () => {
   test("dispatches collection by artifact type and uploads artifact_type", async () => {
     const jobId = "55555555-5555-5555-5555-555555555555";
     const collectorsDir = await mkdtemp(join(tmpdir(), "sf-agent-collectors-"));
+    const collectorWorkdir = await mkdtemp(join(tmpdir(), "sf-agent-container-workdir-"));
     const scriptPath = join(collectorsDir, "collect-container-diagnostics.sh");
     const producedPath = join(
-      collectorsDir,
+      collectorWorkdir,
       "container_diagnostics_payments-api_20260326_101500.txt"
     );
     await writeFile(
@@ -391,6 +394,7 @@ EOF
     const cfg = {
       ...testConfig(),
       collectorsDir,
+      collectorWorkdir,
     };
 
     try {
@@ -403,15 +407,17 @@ EOF
       await unlink(scriptPath).catch(() => undefined);
       await unlink(producedPath).catch(() => undefined);
       await rm(collectorsDir, { recursive: true, force: true });
+      await rm(collectorWorkdir, { recursive: true, force: true });
     }
   });
 
   test("passes jobs/next collection_scope through to collector invocation", async () => {
     const jobId = "66666666-6666-6666-6666-666666666666";
     const collectorsDir = await mkdtemp(join(tmpdir(), "sf-agent-k8s-collectors-"));
+    const collectorWorkdir = await mkdtemp(join(tmpdir(), "sf-agent-k8s-workdir-"));
     const scriptPath = join(collectorsDir, "collect-kubernetes-bundle.sh");
     const producedPath = join(
-      collectorsDir,
+      collectorWorkdir,
       "kubernetes_bundle_payments_20260326_101500.json"
     );
     const argsPath = join(collectorsDir, "collector-args.txt");
@@ -473,6 +479,7 @@ printf '{}\n' > "${producedPath}"
     const cfg = {
       ...testConfig(),
       collectorsDir,
+      collectorWorkdir,
     };
     const seenLogs: string[] = [];
     const originalConsoleError = console.error;
@@ -500,6 +507,7 @@ printf '{}\n' > "${producedPath}"
       await unlink(producedPath).catch(() => undefined);
       await unlink(argsPath).catch(() => undefined);
       await rm(collectorsDir, { recursive: true, force: true });
+      await rm(collectorWorkdir, { recursive: true, force: true });
     }
   });
 });

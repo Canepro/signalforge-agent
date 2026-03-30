@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
+import type { UploadTransport } from "./api.ts";
 
 export interface AgentConfig {
   baseUrl: string;
@@ -9,6 +10,7 @@ export interface AgentConfig {
   agentTokenFile: string | null;
   instanceId: string;
   collectorsDir: string;
+  collectorWorkdir: string;
   containerRuntime: "docker" | "podman" | null;
   containerRuntimeReason: string;
   kubectlBin: string;
@@ -21,6 +23,7 @@ export interface AgentConfig {
   /** When set, upload this file instead of running a collector script */
   artifactFileOverride: string | null;
   agentVersion: string;
+  uploadTransport: UploadTransport;
   /** Mid-job lease heartbeats while collecting/uploading (default 45s) */
   leaseHeartbeatMs: number;
 }
@@ -42,6 +45,7 @@ const DEFAULT_MAX_BACKOFF_MS = 300_000;
 const DEFAULT_JOBS_WAIT_SECONDS = 20;
 const DEFAULT_LEASE_HEARTBEAT_MS = 45_000;
 const DEFAULT_AGENT_VERSION = "0.1.0";
+const DEFAULT_UPLOAD_TRANSPORT: UploadTransport = "fetch";
 
 export interface RuntimeCapabilityCheck {
   capability: Exclude<AgentConfig["capabilities"][number], "upload:multipart">;
@@ -352,6 +356,17 @@ export function loadConfig(options: { probeRuntimeReadiness?: boolean } = {}): A
   if (collectorsDir) {
     collectorsDir = resolve(collectorsDir);
   }
+  const collectorWorkdirRaw = process.env.SIGNALFORGE_AGENT_WORKDIR?.trim() || "";
+  const collectorWorkdir = resolve(collectorWorkdirRaw || collectorsDir);
+  if (!override) {
+    try {
+      mkdirSync(collectorWorkdir, { recursive: true });
+    } catch (error) {
+      throw new ConfigError(
+        `Could not create or access SIGNALFORGE_AGENT_WORKDIR: ${collectorWorkdir} (${error instanceof Error ? error.message : String(error)})`
+      );
+    }
+  }
 
   const pollRaw = process.env.SIGNALFORGE_POLL_INTERVAL_MS?.trim();
   let pollIntervalMs = DEFAULT_POLL_MS;
@@ -390,6 +405,14 @@ export function loadConfig(options: { probeRuntimeReadiness?: boolean } = {}): A
 
   const agentVersion =
     process.env.SIGNALFORGE_AGENT_VERSION?.trim() || DEFAULT_AGENT_VERSION;
+  const uploadTransportRaw =
+    process.env.SIGNALFORGE_AGENT_UPLOAD_TRANSPORT?.trim() || DEFAULT_UPLOAD_TRANSPORT;
+  if (uploadTransportRaw !== "fetch" && uploadTransportRaw !== "curl") {
+    throw new ConfigError(
+      "SIGNALFORGE_AGENT_UPLOAD_TRANSPORT must be fetch or curl"
+    );
+  }
+  const uploadTransport = uploadTransportRaw;
 
   const capabilitiesRaw = process.env.SIGNALFORGE_AGENT_CAPABILITIES?.trim();
   const runtimeHints = loadRuntimeEnvironmentHints({
@@ -423,6 +446,7 @@ export function loadConfig(options: { probeRuntimeReadiness?: boolean } = {}): A
     agentTokenFile: token.tokenFile,
     instanceId,
     collectorsDir,
+    collectorWorkdir,
     containerRuntime: runtimeHints.containerRuntime,
     containerRuntimeReason: runtimeHints.containerRuntimeReason,
     kubectlBin: runtimeHints.kubectlBin,
@@ -433,6 +457,7 @@ export function loadConfig(options: { probeRuntimeReadiness?: boolean } = {}): A
     jobsWaitSeconds,
     artifactFileOverride: override ? resolve(override) : null,
     agentVersion,
+    uploadTransport,
     leaseHeartbeatMs,
   };
 }

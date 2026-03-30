@@ -1,48 +1,150 @@
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: signalforge
+  labels:
+    app.kubernetes.io/name: signalforge-agent
+    app.kubernetes.io/component: kubernetes-runner
+---
+apiVersion: v1
 kind: Secret
 metadata:
   name: signalforge-agent-token
+  namespace: signalforge
 type: Opaque
 stringData:
   token: replace-me
 ---
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
   name: signalforge-agent-kubeconfig
-type: Opaque
-stringData:
+  namespace: signalforge
+data:
   kubeconfig: |
     apiVersion: v1
     kind: Config
-    clusters: []
-    contexts: []
-    current-context: ""
-    users: []
+    clusters:
+      - name: in-cluster
+        cluster:
+          server: https://kubernetes.default.svc
+          certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    contexts:
+      - name: in-cluster
+        context:
+          cluster: in-cluster
+          user: signalforge-agent
+    current-context: in-cluster
+    users:
+      - name: signalforge-agent
+        user:
+          tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: signalforge-agent
+  namespace: signalforge
+  labels:
+    app.kubernetes.io/name: signalforge-agent
+    app.kubernetes.io/component: kubernetes-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: signalforge-agent-kubernetes-reader
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - persistentvolumes
+      - persistentvolumeclaims
+      - pods
+      - events
+      - services
+      - resourcequotas
+      - limitranges
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+      - replicasets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources:
+      - poddisruptionbudgets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - networkpolicies
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources:
+      - nodes
+      - pods
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: signalforge-agent-kubernetes-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: signalforge-agent-kubernetes-reader
+subjects:
+  - kind: ServiceAccount
+    name: signalforge-agent
+    namespace: signalforge
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: signalforge-agent
+  namespace: signalforge
+  labels:
+    app.kubernetes.io/name: signalforge-agent
+    app.kubernetes.io/component: kubernetes-runner
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: signalforge-agent
+      app.kubernetes.io/name: signalforge-agent
+      app.kubernetes.io/component: kubernetes-runner
   template:
     metadata:
       labels:
-        app: signalforge-agent
+        app.kubernetes.io/name: signalforge-agent
+        app.kubernetes.io/component: kubernetes-runner
     spec:
+      serviceAccountName: signalforge-agent
       containers:
         - name: signalforge-agent
-          image: signalforge-agent:local
-          imagePullPolicy: IfNotPresent
+          image: signalforge-agent:replace-me
+          imagePullPolicy: Always
           workingDir: /work
           args: ["run"]
           env:
             - name: SIGNALFORGE_URL
-              value: http://signalforge.default.svc.cluster.local:3000
+              value: https://signalforge.example.com
             - name: SIGNALFORGE_AGENT_INSTANCE_ID
               valueFrom:
                 fieldRef:
@@ -53,6 +155,12 @@ spec:
               value: /var/run/signalforge-agent/kubeconfig
             - name: SIGNALFORGE_AGENT_CAPABILITIES
               value: collect:kubernetes-bundle,upload:multipart
+            - name: SIGNALFORGE_AGENT_UPLOAD_TRANSPORT
+              value: curl
+            - name: SIGNALFORGE_AGENT_WORKDIR
+              value: /work
+            - name: TMPDIR
+              value: /work
           volumeMounts:
             - name: token
               mountPath: /var/run/signalforge-agent/token
@@ -65,6 +173,8 @@ spec:
             - name: workdir
               mountPath: /work
           securityContext:
+            capabilities:
+              drop: ["ALL"]
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             runAsNonRoot: true
@@ -78,12 +188,15 @@ spec:
               memory: 128Mi
             limits:
               memory: 256Mi
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - name: token
           secret:
             secretName: signalforge-agent-token
         - name: kubeconfig
-          secret:
-            secretName: signalforge-agent-kubeconfig
+          configMap:
+            name: signalforge-agent-kubeconfig
         - name: workdir
           emptyDir: {}
