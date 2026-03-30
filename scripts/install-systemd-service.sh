@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEMPLATE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.service"
+RUNTIME_HOST_TEMPLATE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.runtime-host.service"
 ENV_EXAMPLE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.env.example"
 ENV_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.env"
 TOKEN_EXAMPLE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.token.example"
@@ -18,6 +19,7 @@ KUBECONFIG_TARGET_PATH="/etc/${SERVICE_NAME}/kubeconfig"
 AGENT_USER="${SUDO_USER:-$(id -un)}"
 WORKDIR="$REPO_DIR"
 BUN_BIN=""
+SERVICE_PROFILE="standard"
 DRY_RUN=0
 
 usage() {
@@ -35,6 +37,9 @@ Options:
   --kubeconfig-source <path> optional repo-local kubeconfig to install (default: ${KUBECONFIG_SOURCE_PATH})
   --kubeconfig-target <path> installed kubeconfig path (default: ${KUBECONFIG_TARGET_PATH})
   --service-name <name>  systemd unit name without .service (default: ${SERVICE_NAME})
+  --service-profile <profile>
+                         service hardening profile: standard | runtime-host
+                         (default: ${SERVICE_PROFILE})
   --bun <path>           absolute bun binary path (default: auto-detect)
   --dry-run              render into a temporary staging root and skip systemctl
   --help                 show this help
@@ -88,6 +93,10 @@ while [[ $# -gt 0 ]]; do
       KUBECONFIG_TARGET_PATH="/etc/${SERVICE_NAME}/kubeconfig"
       shift 2
       ;;
+    --service-profile)
+      SERVICE_PROFILE="$2"
+      shift 2
+      ;;
     --bun)
       BUN_BIN="$2"
       shift 2
@@ -105,8 +114,22 @@ while [[ $# -gt 0 ]]; do
       usage >&2
       exit 1
       ;;
-  esac
+esac
 done
+
+case "$SERVICE_PROFILE" in
+  standard)
+    TEMPLATE_PATH="$TEMPLATE_PATH"
+    ;;
+  runtime-host)
+    TEMPLATE_PATH="$RUNTIME_HOST_TEMPLATE_PATH"
+    ;;
+  *)
+    echo "Unsupported service profile: ${SERVICE_PROFILE}" >&2
+    echo "Use one of: standard, runtime-host" >&2
+    exit 1
+    ;;
+esac
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   STAGING_ROOT="$(mktemp -d)"

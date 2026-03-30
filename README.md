@@ -159,6 +159,13 @@ $EDITOR contrib/systemd/signalforge-agent.token
 sudo ./scripts/install-systemd-service.sh
 ```
 
+For runtime-host collection where the agent needs direct Docker or Podman access from the host,
+use the less restrictive runtime-host profile instead of the default hardened host-audit profile:
+
+```bash
+sudo ./scripts/install-systemd-service.sh --service-name signalforge-agent-container --service-profile runtime-host
+```
+
 The installer:
 
 - copies your env file to `/etc/signalforge-agent.env`
@@ -167,6 +174,9 @@ The installer:
 - strips any inline token from the installed env file
 - writes `SIGNALFORGE_KUBECONFIG=/etc/signalforge-agent/kubeconfig` into the installed env file when that managed kubeconfig is present
 - renders the service with the current checkout path, user, absolute Bun binary, and a `LoadCredential=` token mount
+- can render either:
+  - the default hardened `standard` profile for host-style collection
+  - the reduced `runtime-host` profile for container-runtime access on the host
 - runs a `preflight --quiet` gate before `ExecStart`
 - then runs:
 
@@ -193,7 +203,7 @@ The preferred long-running form depends on the artifact family and execution sur
 | Artifact family | Preferred deployment form | Why |
 |----------------|---------------------------|-----|
 | `linux-audit-log` | host `systemd` service | The collector audits the host itself. Running it inside another container would audit the wrong surface. |
-| `container-diagnostics` | containerized runner on the runtime host | Easier long-running packaging for teams already operating Docker or Podman, while still staying near the runtime socket. |
+| `container-diagnostics` | runtime-host service or containerized runner on the runtime host | Keep the agent near the real runtime socket. Prefer a root-owned `systemd` service when you can install one cleanly; use a containerized runner when that packaging is a better operational fit. |
 | `kubernetes-bundle` | cluster-side Kubernetes Deployment | Best fit for always-on polling with explicit kubeconfig or in-cluster identity and without depending on a laptop or ambient shell context. |
 
 Across all forms:
@@ -202,7 +212,35 @@ Across all forms:
 - pin capabilities to the family that actually makes sense for that deployment form
 - run `signalforge-agent preflight` before enabling or promoting the workload
 
-### Preferred container-host packaging for `container-diagnostics`
+### Runtime-host `systemd` packaging for `container-diagnostics`
+
+When you can install a root-owned system service, this is a strong default for Podman or Docker-backed hosts because:
+
+- the agent still runs as the target host user, so it sees the correct rootless runtime state
+- the service can start at boot without depending on a login session
+- you avoid wrapping a host-adjacent collector in another container just to supervise it
+
+Use the same installer flow as host audit, but switch the service profile:
+
+```bash
+cp contrib/systemd/signalforge-agent.env.example contrib/systemd/signalforge-agent-container.env
+cp contrib/systemd/signalforge-agent.token.example contrib/systemd/signalforge-agent-container.token
+$EDITOR contrib/systemd/signalforge-agent-container.env
+$EDITOR contrib/systemd/signalforge-agent-container.token
+sudo ./scripts/install-systemd-service.sh \
+  --service-name signalforge-agent-container \
+  --service-profile runtime-host \
+  --env-source contrib/systemd/signalforge-agent-container.env \
+  --token-source contrib/systemd/signalforge-agent-container.token
+```
+
+Recommended env choices for this form:
+
+- pin `SIGNALFORGE_AGENT_CAPABILITIES=collect:container-diagnostics,upload:multipart`
+- set `SIGNALFORGE_CONTAINER_RUNTIME=podman` or `docker` when you want the collector-side default to stay explicit
+- keep the token in the separate token file, not inline in the env file
+
+### Containerized runner packaging for `container-diagnostics`
 
 Build the image from sibling repo checkouts:
 
