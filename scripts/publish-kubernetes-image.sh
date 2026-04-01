@@ -6,13 +6,13 @@ usage() {
 Usage:
   publish-kubernetes-image.sh --registry <acr-name> --image <repo:tag> [options]
 
-Build the SignalForge agent image in Azure Container Registry so Kubernetes targets
+Optional Azure helper: build the SignalForge agent image in Azure Container Registry so Kubernetes targets
 do not depend on local cross-architecture emulation.
 
 Required:
-  --registry <name>        Azure Container Registry name, for example: caneprophacr01
+  --registry <name>        Azure Container Registry name
   --image <repo:tag>       Repository and tag inside the registry, for example:
-                           signalforge-agent:oke-arm64-20260330
+                           signalforge-agent:kubernetes-arm64-20260401
 
 Options:
   --platform <os/arch>     Target image platform. Default: linux/arm64
@@ -91,7 +91,7 @@ if [[ ! -d "$COLLECTORS_DIR" ]]; then
 fi
 
 if ! command -v az >/dev/null 2>&1; then
-  echo "Azure CLI is required for remote ACR builds." >&2
+  echo "Azure CLI is required for the optional remote ACR build path." >&2
   exit 1
 fi
 

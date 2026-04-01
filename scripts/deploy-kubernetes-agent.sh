@@ -4,22 +4,28 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  deploy-kubernetes-agent.sh --image <registry/image:tag> --signalforge-url <url> [options]
+  deploy-kubernetes-agent.sh --image <registry/image:tag> --signalforge-base-url <url> [options]
 
 Deploy or update the cluster-side SignalForge Kubernetes agent using the reference
 manifest in contrib/kubernetes/deployment.yaml.
 
 Required:
   --image <image>               Full image reference
-  --signalforge-url <url>       Control-plane base URL
+  --signalforge-base-url <url>  Control-plane base URL
+  --signalforge-url <url>       Legacy compatibility alias for --signalforge-base-url
 
 Authentication:
   --agent-token <token>         Agent enrollment token
   --agent-token-file <path>     File containing the agent enrollment token
 
-Registry access:
-  --acr-name <name>             Azure Container Registry name. When provided, the script
-                                creates or updates an image pull secret from `az acr login --expose-token`.
+Private registry access:
+  --acr-name <name>             Azure Container Registry helper. Creates or updates a pull
+                                secret from `az acr login --expose-token`.
+  --registry-server <host>      Registry host for a generic docker-registry pull secret
+  --registry-username <value>   Registry username for the generic pull secret path
+  --registry-password <value>   Registry password for the generic pull secret path
+  --registry-password-file <path>
+                                File containing the registry password
   --pull-secret-name <name>     Pull secret name. Default: signalforge-agent-regcred
   --skip-pull-secret            Do not manage image pull credentials
 
@@ -27,7 +33,7 @@ Options:
   --namespace <name>            Kubernetes namespace. Default: signalforge
   --context <name>              kubectl context to target
   --kube-context-alias <name>   Extra kubeconfig context name to expose inside the pod,
-                                for example: oke-cluster
+                                for example: prod-cluster
   --deployment-name <name>      Deployment name. Default: signalforge-agent
   --help                        Show this help text
 EOF
@@ -43,10 +49,14 @@ PULL_SECRET_NAME="signalforge-agent-regcred"
 KUBE_CONTEXT=""
 KUBE_CONTEXT_ALIAS=""
 IMAGE=""
-SIGNALFORGE_URL=""
+SIGNALFORGE_BASE_URL=""
 AGENT_TOKEN=""
 AGENT_TOKEN_FILE=""
 ACR_NAME=""
+REGISTRY_SERVER=""
+REGISTRY_USERNAME=""
+REGISTRY_PASSWORD=""
+REGISTRY_PASSWORD_FILE=""
 SKIP_PULL_SECRET="false"
 
 while [[ $# -gt 0 ]]; do
@@ -55,8 +65,8 @@ while [[ $# -gt 0 ]]; do
       IMAGE="${2:-}"
       shift 2
       ;;
-    --signalforge-url)
-      SIGNALFORGE_URL="${2:-}"
+    --signalforge-base-url|--signalforge-url)
+      SIGNALFORGE_BASE_URL="${2:-}"
       shift 2
       ;;
     --agent-token)
@@ -69,6 +79,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --acr-name)
       ACR_NAME="${2:-}"
+      shift 2
+      ;;
+    --registry-server)
+      REGISTRY_SERVER="${2:-}"
+      shift 2
+      ;;
+    --registry-username)
+      REGISTRY_USERNAME="${2:-}"
+      shift 2
+      ;;
+    --registry-password)
+      REGISTRY_PASSWORD="${2:-}"
+      shift 2
+      ;;
+    --registry-password-file)
+      REGISTRY_PASSWORD_FILE="${2:-}"
       shift 2
       ;;
     --pull-secret-name)
@@ -107,13 +133,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$IMAGE" || -z "$SIGNALFORGE_URL" ]]; then
+if [[ -z "$IMAGE" || -z "$SIGNALFORGE_BASE_URL" ]]; then
   usage >&2
   exit 1
 fi
 
 if [[ -n "$AGENT_TOKEN" && -n "$AGENT_TOKEN_FILE" ]]; then
   echo "Set either --agent-token or --agent-token-file, not both." >&2
+  exit 1
+fi
+
+if [[ -n "$REGISTRY_PASSWORD" && -n "$REGISTRY_PASSWORD_FILE" ]]; then
+  echo "Set either --registry-password or --registry-password-file, not both." >&2
   exit 1
 fi
 
@@ -125,6 +156,14 @@ if [[ -n "$AGENT_TOKEN_FILE" ]]; then
   AGENT_TOKEN="$(tr -d '\r' <"$AGENT_TOKEN_FILE")"
 fi
 
+if [[ -n "$REGISTRY_PASSWORD_FILE" ]]; then
+  if [[ ! -f "$REGISTRY_PASSWORD_FILE" ]]; then
+    echo "Registry password file not found: $REGISTRY_PASSWORD_FILE" >&2
+    exit 1
+  fi
+  REGISTRY_PASSWORD="$(tr -d '\r' <"$REGISTRY_PASSWORD_FILE")"
+fi
+
 if [[ -z "$AGENT_TOKEN" ]]; then
   echo "An agent token is required." >&2
   exit 1
@@ -133,6 +172,18 @@ fi
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "kubectl is required." >&2
   exit 1
+fi
+
+if [[ -n "$ACR_NAME" && ( -n "$REGISTRY_SERVER" || -n "$REGISTRY_USERNAME" || -n "$REGISTRY_PASSWORD" ) ]]; then
+  echo "Use either the Azure ACR helper flags or the generic registry credential flags, not both." >&2
+  exit 1
+fi
+
+if [[ "$SKIP_PULL_SECRET" != "true" && -z "$ACR_NAME" && ( -n "$REGISTRY_SERVER" || -n "$REGISTRY_USERNAME" || -n "$REGISTRY_PASSWORD" ) ]]; then
+  if [[ -z "$REGISTRY_SERVER" || -z "$REGISTRY_USERNAME" || -z "$REGISTRY_PASSWORD" ]]; then
+    echo "Generic registry secret creation requires --registry-server, --registry-username, and a registry password." >&2
+    exit 1
+  fi
 fi
 
 kubectl_args=()
@@ -188,31 +239,36 @@ kubectl "${kubectl_args[@]}" -n "$NAMESPACE" create secret generic signalforge-a
   --from-literal=token="$AGENT_TOKEN" \
   --dry-run=client -o yaml | kubectl "${kubectl_args[@]}" apply -f -
 
-if [[ "$SKIP_PULL_SECRET" != "true" && -n "$ACR_NAME" ]]; then
-  if ! command -v az >/dev/null 2>&1; then
-    echo "Azure CLI is required when --acr-name is set." >&2
-    exit 1
+if [[ "$SKIP_PULL_SECRET" != "true" ]]; then
+  if [[ -n "$ACR_NAME" ]]; then
+    if ! command -v az >/dev/null 2>&1; then
+      echo "Azure CLI is required when --acr-name is set." >&2
+      exit 1
+    fi
+
+    REGISTRY_SERVER="$(az acr show --name "$ACR_NAME" --query loginServer -o tsv | tr -d '\r')"
+    REGISTRY_USERNAME='00000000-0000-0000-0000-000000000000'
+    REGISTRY_PASSWORD="$(az acr login --name "$ACR_NAME" --expose-token --query accessToken -o tsv | tr -d '\r')"
   fi
 
-  registry_server="$(az acr show --name "$ACR_NAME" --query loginServer -o tsv | tr -d '\r')"
-  access_token="$(az acr login --name "$ACR_NAME" --expose-token --query accessToken -o tsv | tr -d '\r')"
+  if [[ -n "$REGISTRY_SERVER" ]]; then
+    kubectl "${kubectl_args[@]}" -n "$NAMESPACE" create secret docker-registry "$PULL_SECRET_NAME" \
+      --docker-server="$REGISTRY_SERVER" \
+      --docker-username="$REGISTRY_USERNAME" \
+      --docker-password="$REGISTRY_PASSWORD" \
+      --dry-run=client -o yaml | kubectl "${kubectl_args[@]}" apply -f -
 
-  kubectl "${kubectl_args[@]}" -n "$NAMESPACE" create secret docker-registry "$PULL_SECRET_NAME" \
-    --docker-server="$registry_server" \
-    --docker-username='00000000-0000-0000-0000-000000000000' \
-    --docker-password="$access_token" \
-    --dry-run=client -o yaml | kubectl "${kubectl_args[@]}" apply -f -
-
-  kubectl "${kubectl_args[@]}" -n "$NAMESPACE" patch serviceaccount signalforge-agent \
-    --type merge \
-    --patch "{\"imagePullSecrets\":[{\"name\":\"$PULL_SECRET_NAME\"}]}"
+    kubectl "${kubectl_args[@]}" -n "$NAMESPACE" patch serviceaccount signalforge-agent \
+      --type merge \
+      --patch "{\"imagePullSecrets\":[{\"name\":\"$PULL_SECRET_NAME\"}]}"
+  fi
 fi
 
 kubectl "${kubectl_args[@]}" -n "$NAMESPACE" set image "deployment/${DEPLOYMENT_NAME}" \
   "signalforge-agent=${IMAGE}"
 
 kubectl "${kubectl_args[@]}" -n "$NAMESPACE" set env "deployment/${DEPLOYMENT_NAME}" \
-  "SIGNALFORGE_URL=${SIGNALFORGE_URL}"
+  "SIGNALFORGE_BASE_URL=${SIGNALFORGE_BASE_URL}"
 
 kubectl "${kubectl_args[@]}" -n "$NAMESPACE" rollout restart "deployment/${DEPLOYMENT_NAME}"
 
@@ -223,7 +279,10 @@ echo "Deployment is ready."
 echo "Namespace: $NAMESPACE"
 echo "Deployment: $DEPLOYMENT_NAME"
 echo "Image: $IMAGE"
-echo "SignalForge URL: $SIGNALFORGE_URL"
+echo "SignalForge base URL: $SIGNALFORGE_BASE_URL"
+if [[ -n "$REGISTRY_SERVER" ]]; then
+  echo "Pull secret: $PULL_SECRET_NAME ($REGISTRY_SERVER)"
+fi
 echo
 echo "Useful checks:"
 echo "  kubectl ${KUBE_CONTEXT:+--context $KUBE_CONTEXT }-n $NAMESPACE get pods"

@@ -13,40 +13,56 @@ This repo treats the Kubernetes runner as:
 
 ## Why this path exists
 
-Local cross-architecture builds are easy to get wrong on mixed `amd64` workstations and
-`arm64` clusters. The repeatable default here is:
+Cluster-side deployment is the preferred durable form for `kubernetes-bundle` collection.
+This repo keeps that path portable by separating three concerns:
 
-1. publish the image in Azure Container Registry with `az acr build`
+1. build or publish an image in whatever registry your cluster can pull from
 2. deploy with the checked-in manifest plus the rollout script
 3. validate against a real queued job
 
-That keeps the build architecture, registry auth, and deployment wiring in one documented flow.
-On WSL machines that use the Windows Azure CLI, the publish script automatically stages the
-build on the Windows temp drive, passes an absolute Windows Dockerfile path to `az acr build`,
-and forwards the target architecture so the bundled `kubectl` binary matches the cluster nodes.
+That keeps registry choice, cluster auth, and deployment wiring explicit instead of tied to one operator environment.
 The reference manifest also pins `SIGNALFORGE_AGENT_UPLOAD_TRANSPORT=curl`, because that has
 proven more reliable than Bun multipart upload in the hardened cluster-side container runtime.
 
+## Registry stance
+
+The preferred portable image path is a public image such as:
+
+- `ghcr.io/<owner>/signalforge-agent:<tag>`
+
+For private registries, the deploy script supports two paths:
+
+- Azure helper: `--acr-name <name>`
+- generic docker-registry credentials: `--registry-server`, `--registry-username`, and `--registry-password-file`
+
 ## Prerequisites
 
-- `az` logged into the Azure subscription that can access your ACR
 - `kubectl` pointed at the target cluster
 - an enrolled SignalForge agent token for the Kubernetes source you want this runner to serve
 - sibling repo layout:
   - `../signalforge-agent`
   - `../signalforge-collectors`
 
-## 1. Publish an arm64 image in ACR
+If you want to use the optional Azure ACR build helper, also install `az` and log into the subscription that owns that registry.
 
-Build the image remotely so the cluster gets the correct architecture without relying on
-local emulation:
+## 1. Publish or choose a cluster image
+
+### Portable default: use a public image
+
+Build and publish an image with your normal registry workflow, then deploy it by full reference:
 
 ```bash
-cd /home/vincent/src/signalforge-agent
+IMAGE=ghcr.io/example/signalforge-agent:kubernetes-arm64-20260401
+```
 
-./scripts/publish-kubernetes-image.sh \
-  --registry caneprophacr01 \
-  --image signalforge-agent:oke-arm64-$(date +%Y%m%d-%H%M%S)
+### Optional Azure helper: remote-build into ACR
+
+If your cluster pulls from Azure Container Registry and you want a checked-in remote build path:
+
+```bash
+cd /path/to/signalforge-agent
+
+./scripts/publish-kubernetes-image.sh   --registry exampleacr   --image signalforge-agent:kubernetes-arm64-$(date +%Y%m%d-%H%M%S)
 ```
 
 By default this publishes `linux/arm64`. Override with `--platform` only when the cluster
@@ -54,17 +70,24 @@ is not arm64.
 
 ## 2. Deploy the cluster-side runner
 
-Use the published image, SignalForge URL, and the source-bound agent token:
+### Public image or already-accessible private image
 
 ```bash
-cd /home/vincent/src/signalforge-agent
+cd /path/to/signalforge-agent
 
-./scripts/deploy-kubernetes-agent.sh \
-  --image caneprophacr01.azurecr.io/signalforge-agent:oke-arm64-20260330-180000 \
-  --signalforge-url https://ca-signalforge-staging.kinddune-53ac219d.eastus2.azurecontainerapps.io \
-  --agent-token-file /secure/path/signalforge-kubernetes-agent.token \
-  --kube-context-alias oke-cluster \
-  --acr-name caneprophacr01
+./scripts/deploy-kubernetes-agent.sh   --image ghcr.io/example/signalforge-agent:kubernetes-arm64-20260401   --signalforge-base-url https://signalforge.example.com   --agent-token-file /secure/path/signalforge-kubernetes-agent.token   --kube-context-alias prod-cluster
+```
+
+### Private registry with generic credentials
+
+```bash
+./scripts/deploy-kubernetes-agent.sh   --image registry.example.com/platform/signalforge-agent:kubernetes-arm64-20260401   --signalforge-base-url https://signalforge.example.com   --agent-token-file /secure/path/signalforge-kubernetes-agent.token   --kube-context-alias prod-cluster   --registry-server registry.example.com   --registry-username signalforge-agent   --registry-password-file /secure/path/registry.password
+```
+
+### Private registry via Azure helper
+
+```bash
+./scripts/deploy-kubernetes-agent.sh   --image exampleacr.azurecr.io/signalforge-agent:kubernetes-arm64-20260401   --signalforge-base-url https://signalforge.example.com   --agent-token-file /secure/path/signalforge-kubernetes-agent.token   --kube-context-alias prod-cluster   --acr-name exampleacr
 ```
 
 What the deploy script does:
@@ -72,9 +95,9 @@ What the deploy script does:
 - applies `contrib/kubernetes/deployment.yaml`
 - creates or updates the `signalforge-agent-token` secret
 - creates or updates the in-cluster kubeconfig `ConfigMap`, with an optional context alias that matches queued job scope
-- creates or updates an ACR pull secret when `--acr-name` is supplied
-- patches the `signalforge-agent` service account with that pull secret
-- sets the deployment image and `SIGNALFORGE_URL`
+- optionally creates or updates an image pull secret
+- patches the `signalforge-agent` service account with that pull secret when one is managed
+- sets the deployment image and `SIGNALFORGE_BASE_URL`
 - keeps cluster-side artifact uploads on the explicit `curl` transport
 - waits for rollout success
 
@@ -119,11 +142,7 @@ If SignalForge queues `collection_scope.kubectl_context`, pass the same value as
 To redeploy a new image:
 
 ```bash
-./scripts/deploy-kubernetes-agent.sh \
-  --image <new-image> \
-  --signalforge-url <signalforge-url> \
-  --agent-token-file <token-file> \
-  --acr-name <acr-name>
+./scripts/deploy-kubernetes-agent.sh   --image <new-image>   --signalforge-base-url <signalforge-url>   --agent-token-file <token-file>
 ```
 
 To remove an obsolete failed namespace from earlier experiments:

@@ -1,0 +1,22 @@
+[Unit]
+Description=SignalForge agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__SIGNALFORGE_AGENT_WORKDIR__
+EnvironmentFile=__SIGNALFORGE_AGENT_ENV_FILE__
+Environment=NODE_ENV=production
+Environment=SIGNALFORGE_AGENT_TOKEN_FILE=__SIGNALFORGE_AGENT_TOKEN_FILE__
+ExecStartPre=__SIGNALFORGE_AGENT_BUN__ run src/cli.ts preflight --quiet
+ExecStart=__SIGNALFORGE_AGENT_BUN__ run src/cli.ts run
+Restart=always
+RestartSec=5
+UMask=0077
+PrivateTmp=yes
+KillMode=control-group
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

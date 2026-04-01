@@ -333,13 +333,13 @@ function loadRuntimeEnvironmentHints(
 }
 
 /**
- * Load config from environment. Uses SIGNALFORGE_URL or SIGNALFORGE_BASE_URL.
+ * Load config from environment. Uses SIGNALFORGE_BASE_URL or SIGNALFORGE_URL.
  */
 export function loadConfig(options: { probeRuntimeReadiness?: boolean } = {}): AgentConfig {
   const baseRaw =
-    process.env.SIGNALFORGE_URL?.trim() || process.env.SIGNALFORGE_BASE_URL?.trim();
+    process.env.SIGNALFORGE_BASE_URL?.trim() || process.env.SIGNALFORGE_URL?.trim();
   if (!baseRaw) {
-    throw new ConfigError("Set SIGNALFORGE_URL (or SIGNALFORGE_BASE_URL)");
+    throw new ConfigError("Set SIGNALFORGE_BASE_URL (or SIGNALFORGE_URL)");
   }
   const baseUrl = baseRaw.replace(/\/+$/, "");
 

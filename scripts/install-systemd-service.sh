@@ -3,8 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TEMPLATE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.service"
-RUNTIME_HOST_TEMPLATE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.runtime-host.service"
+SYSTEM_TEMPLATE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.service"
+SYSTEM_RUNTIME_HOST_TEMPLATE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.runtime-host.service"
+USER_TEMPLATE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.user.service"
+USER_RUNTIME_HOST_TEMPLATE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.user.runtime-host.service"
 ENV_EXAMPLE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.env.example"
 ENV_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.env"
 TOKEN_EXAMPLE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.token.example"
@@ -12,23 +14,64 @@ TOKEN_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.token"
 KUBECONFIG_SOURCE_PATH="$REPO_DIR/contrib/systemd/signalforge-agent.kubeconfig"
 
 SERVICE_NAME="signalforge-agent"
-SERVICE_TARGET_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
-ENV_TARGET_PATH="/etc/${SERVICE_NAME}.env"
-TOKEN_TARGET_PATH="/etc/${SERVICE_NAME}/token"
-KUBECONFIG_TARGET_PATH="/etc/${SERVICE_NAME}/kubeconfig"
+SERVICE_SCOPE="system"
 AGENT_USER="${SUDO_USER:-$(id -un)}"
 WORKDIR="$REPO_DIR"
 BUN_BIN=""
 SERVICE_PROFILE="standard"
 DRY_RUN=0
 
+service_target_path() {
+  local service_name="$1"
+  if [[ "$SERVICE_SCOPE" == "user" ]]; then
+    printf '%s/.config/systemd/user/%s.service' "$HOME" "$service_name"
+  else
+    printf '/etc/systemd/system/%s.service' "$service_name"
+  fi
+}
+
+env_target_path() {
+  local service_name="$1"
+  if [[ "$SERVICE_SCOPE" == "user" ]]; then
+    printf '%s/.config/signalforge-agent/%s.env' "$HOME" "$service_name"
+  else
+    printf '/etc/%s.env' "$service_name"
+  fi
+}
+
+token_target_path() {
+  local service_name="$1"
+  if [[ "$SERVICE_SCOPE" == "user" ]]; then
+    printf '%s/.config/signalforge-agent/%s.token' "$HOME" "$service_name"
+  else
+    printf '/etc/%s/token' "$service_name"
+  fi
+}
+
+kubeconfig_target_path() {
+  local service_name="$1"
+  if [[ "$SERVICE_SCOPE" == "user" ]]; then
+    printf '%s/.config/signalforge-agent/%s.kubeconfig' "$HOME" "$service_name"
+  else
+    printf '/etc/%s/kubeconfig' "$service_name"
+  fi
+}
+
+SERVICE_TARGET_PATH="$(service_target_path "$SERVICE_NAME")"
+ENV_TARGET_PATH="$(env_target_path "$SERVICE_NAME")"
+TOKEN_TARGET_PATH="$(token_target_path "$SERVICE_NAME")"
+KUBECONFIG_TARGET_PATH="$(kubeconfig_target_path "$SERVICE_NAME")"
+TEMPLATE_PATH="$SYSTEM_TEMPLATE_PATH"
+
 usage() {
   cat <<EOF
 Usage:
-  sudo ./scripts/install-systemd-service.sh [options]
+  ./scripts/install-systemd-service.sh [options]
 
 Options:
-  --user <name>          system user for the service (default: ${AGENT_USER})
+  --scope <system|user>  install a root-managed system unit or a user-systemd unit
+                         (default: ${SERVICE_SCOPE})
+  --user <name>          runtime user for the system unit (default: ${AGENT_USER})
   --workdir <path>       signalforge-agent checkout path (default: ${WORKDIR})
   --env-source <path>    repo-local env file to install (default: ${ENV_SOURCE_PATH})
   --env-target <path>    installed env file path (default: ${ENV_TARGET_PATH})
@@ -47,12 +90,24 @@ Options:
 Workflow:
   1. Copy ${ENV_EXAMPLE_PATH} to ${ENV_SOURCE_PATH}
   2. Fill in the token and paths once
-  3. Run this installer with sudo
+  3. Run this installer with sudo for --scope system, or as the target user for --scope user
 EOF
+}
+
+refresh_paths() {
+  SERVICE_TARGET_PATH="$(service_target_path "$SERVICE_NAME")"
+  ENV_TARGET_PATH="$(env_target_path "$SERVICE_NAME")"
+  TOKEN_TARGET_PATH="$(token_target_path "$SERVICE_NAME")"
+  KUBECONFIG_TARGET_PATH="$(kubeconfig_target_path "$SERVICE_NAME")"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --scope)
+      SERVICE_SCOPE="$2"
+      refresh_paths
+      shift 2
+      ;;
     --user)
       AGENT_USER="$2"
       shift 2
@@ -87,10 +142,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --service-name)
       SERVICE_NAME="$2"
-      SERVICE_TARGET_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
-      ENV_TARGET_PATH="/etc/${SERVICE_NAME}.env"
-      TOKEN_TARGET_PATH="/etc/${SERVICE_NAME}/token"
-      KUBECONFIG_TARGET_PATH="/etc/${SERVICE_NAME}/kubeconfig"
+      refresh_paths
       shift 2
       ;;
     --service-profile)
@@ -114,19 +166,35 @@ while [[ $# -gt 0 ]]; do
       usage >&2
       exit 1
       ;;
-esac
+  esac
 done
 
-case "$SERVICE_PROFILE" in
-  standard)
-    TEMPLATE_PATH="$TEMPLATE_PATH"
-    ;;
-  runtime-host)
-    TEMPLATE_PATH="$RUNTIME_HOST_TEMPLATE_PATH"
+case "$SERVICE_SCOPE" in
+  system|user)
     ;;
   *)
-    echo "Unsupported service profile: ${SERVICE_PROFILE}" >&2
-    echo "Use one of: standard, runtime-host" >&2
+    echo "Unsupported service scope: ${SERVICE_SCOPE}" >&2
+    echo "Use one of: system, user" >&2
+    exit 1
+    ;;
+esac
+
+case "${SERVICE_SCOPE}:${SERVICE_PROFILE}" in
+  system:standard)
+    TEMPLATE_PATH="$SYSTEM_TEMPLATE_PATH"
+    ;;
+  system:runtime-host)
+    TEMPLATE_PATH="$SYSTEM_RUNTIME_HOST_TEMPLATE_PATH"
+    ;;
+  user:standard)
+    TEMPLATE_PATH="$USER_TEMPLATE_PATH"
+    ;;
+  user:runtime-host)
+    TEMPLATE_PATH="$USER_RUNTIME_HOST_TEMPLATE_PATH"
+    ;;
+  *)
+    echo "Unsupported service profile for scope ${SERVICE_SCOPE}: ${SERVICE_PROFILE}" >&2
+    echo "Use profile standard or runtime-host" >&2
     exit 1
     ;;
 esac
@@ -134,14 +202,19 @@ esac
 if [[ "$DRY_RUN" -eq 1 ]]; then
   STAGING_ROOT="$(mktemp -d)"
   trap 'rm -rf "$STAGING_ROOT"' EXIT
-  SERVICE_TARGET_PATH="${STAGING_ROOT}/etc/systemd/system/${SERVICE_NAME}.service"
-  ENV_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}.env"
-  TOKEN_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}/token"
-  KUBECONFIG_TARGET_PATH="${STAGING_ROOT}/etc/${SERVICE_NAME}/kubeconfig"
+  SERVICE_TARGET_PATH="${STAGING_ROOT}${SERVICE_TARGET_PATH}"
+  ENV_TARGET_PATH="${STAGING_ROOT}${ENV_TARGET_PATH}"
+  TOKEN_TARGET_PATH="${STAGING_ROOT}${TOKEN_TARGET_PATH}"
+  KUBECONFIG_TARGET_PATH="${STAGING_ROOT}${KUBECONFIG_TARGET_PATH}"
 fi
 
-if [[ "$DRY_RUN" -ne 1 && "$(id -u)" -ne 0 ]]; then
-  echo "Run as root, for example: sudo ./scripts/install-systemd-service.sh" >&2
+if [[ "$DRY_RUN" -ne 1 && "$SERVICE_SCOPE" == "system" && "$(id -u)" -ne 0 ]]; then
+  echo "Run as root for --scope system, for example: sudo ./scripts/install-systemd-service.sh" >&2
+  exit 1
+fi
+
+if [[ "$DRY_RUN" -ne 1 && "$SERVICE_SCOPE" == "user" && -n "${SUDO_USER:-}" ]]; then
+  echo "Run --scope user as the target login user, not through sudo." >&2
   exit 1
 fi
 
@@ -151,13 +224,11 @@ if [[ ! -f "$TEMPLATE_PATH" ]]; then
 fi
 
 if [[ -z "$BUN_BIN" ]]; then
-  if [[ -n "${SUDO_USER:-}" ]]; then
+  if [[ "$SERVICE_SCOPE" == "system" && -n "${SUDO_USER:-}" ]]; then
     BUN_BIN="$(su - "$SUDO_USER" -c 'command -v bun' 2>/dev/null || true)"
+  elif command -v bun >/dev/null 2>&1; then
+    BUN_BIN="$(command -v bun)"
   fi
-fi
-
-if [[ -z "$BUN_BIN" ]] && command -v bun >/dev/null 2>&1; then
-  BUN_BIN="$(command -v bun)"
 fi
 
 if [[ -z "$BUN_BIN" || ! -x "$BUN_BIN" ]]; then
@@ -184,10 +255,14 @@ source "$ENV_SOURCE_PATH"
 set +a
 
 required_vars=(
-  SIGNALFORGE_URL
   SIGNALFORGE_AGENT_INSTANCE_ID
   SIGNALFORGE_COLLECTORS_DIR
 )
+
+if [[ -z "${SIGNALFORGE_BASE_URL:-}" && -z "${SIGNALFORGE_URL:-}" ]]; then
+  echo "Missing required value in ${ENV_SOURCE_PATH}: SIGNALFORGE_BASE_URL or SIGNALFORGE_URL" >&2
+  exit 1
+fi
 
 for name in "${required_vars[@]}"; do
   if [[ -z "${!name:-}" ]]; then
@@ -223,13 +298,16 @@ if [[ -f "$KUBECONFIG_SOURCE_PATH" && -s "$KUBECONFIG_SOURCE_PATH" ]]; then
   printf '\nSIGNALFORGE_KUBECONFIG=%s\n' "$KUBECONFIG_TARGET_PATH" >> "$ENV_TARGET_PATH"
 fi
 
-sed \
-  -e "s|__SIGNALFORGE_AGENT_USER__|${AGENT_USER}|g" \
-  -e "s|__SIGNALFORGE_AGENT_WORKDIR__|${WORKDIR}|g" \
-  -e "s|__SIGNALFORGE_AGENT_ENV_FILE__|${ENV_TARGET_PATH}|g" \
-  -e "s|__SIGNALFORGE_AGENT_TOKEN_FILE__|${TOKEN_TARGET_PATH}|g" \
-  -e "s|__SIGNALFORGE_AGENT_BUN__|${BUN_BIN}|g" \
-  "$TEMPLATE_PATH" > "$SERVICE_TARGET_PATH"
+sed_args=(
+  -e "s|__SIGNALFORGE_AGENT_WORKDIR__|${WORKDIR}|g"
+  -e "s|__SIGNALFORGE_AGENT_ENV_FILE__|${ENV_TARGET_PATH}|g"
+  -e "s|__SIGNALFORGE_AGENT_TOKEN_FILE__|${TOKEN_TARGET_PATH}|g"
+  -e "s|__SIGNALFORGE_AGENT_BUN__|${BUN_BIN}|g"
+)
+if [[ "$SERVICE_SCOPE" == "system" ]]; then
+  sed_args+=( -e "s|__SIGNALFORGE_AGENT_USER__|${AGENT_USER}|g" )
+fi
+sed "${sed_args[@]}" "$TEMPLATE_PATH" > "$SERVICE_TARGET_PATH"
 
 chmod 644 "$SERVICE_TARGET_PATH"
 
@@ -241,6 +319,27 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   if [[ -f "$KUBECONFIG_TARGET_PATH" ]]; then
     echo "Rendered ${KUBECONFIG_TARGET_PATH}"
   fi
+  exit 0
+fi
+
+if [[ "$SERVICE_SCOPE" == "user" ]]; then
+  systemctl --user daemon-reload
+  systemctl --user enable --now "${SERVICE_NAME}"
+  echo "Installed ${SERVICE_TARGET_PATH}"
+  echo "Installed ${ENV_TARGET_PATH}"
+  echo "Installed ${TOKEN_TARGET_PATH}"
+  if [[ -f "$KUBECONFIG_TARGET_PATH" ]]; then
+    echo "Installed ${KUBECONFIG_TARGET_PATH}"
+  fi
+  echo
+  echo "Check status:"
+  echo "  systemctl --user status ${SERVICE_NAME}"
+  echo
+  echo "Follow logs:"
+  echo "  journalctl --user -u ${SERVICE_NAME} -f"
+  echo
+  echo "For reboot persistence without an active login session, enable linger once:"
+  echo "  sudo loginctl enable-linger $(id -un)"
   exit 0
 fi
 
