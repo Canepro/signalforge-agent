@@ -325,11 +325,10 @@ Still validate:
 ### Preferred cluster-side packaging for `kubernetes-bundle`
 
 Use the bundled deployment manifest when a cluster-side runner is the right operational model.
-For a repeatable rollout, prefer a full image reference plus the checked-in deploy script. The
-portable default is a public image:
+For a repeatable rollout, prefer the official public image plus the checked-in deploy script:
 
 ```bash
-./scripts/deploy-kubernetes-agent.sh   --image ghcr.io/example/signalforge-agent:kubernetes-arm64-20260401   --signalforge-base-url https://signalforge.example.com   --agent-token-file /secure/path/signalforge-kubernetes-agent.token   --kube-context-alias prod-cluster
+./scripts/deploy-kubernetes-agent.sh   --image ghcr.io/canepro/signalforge-agent:latest   --signalforge-base-url https://signalforge.example.com   --agent-token-file /secure/path/signalforge-kubernetes-agent.token   --kube-context-alias prod-cluster
 ```
 
 If your registry is private, either use the generic pull-secret flags:
@@ -357,7 +356,7 @@ What the manifest now gives you by default:
 Before using it:
 
 - replace the placeholder SignalForge agent token secret
-- replace the placeholder image reference with your pushed agent image, or let `scripts/deploy-kubernetes-agent.sh` do that for you
+- use the official `ghcr.io/canepro/signalforge-agent:latest` image, or override it with your own registry copy through `scripts/deploy-kubernetes-agent.sh`
 - add an image pull secret if the registry is private, or let `scripts/deploy-kubernetes-agent.sh` manage it through either the generic registry flags or `--acr-name ...`
 - build the image for the cluster node architecture, for example `linux/arm64` on arm64 nodes
 - keep the capability override pinned to `collect:kubernetes-bundle,upload:multipart`

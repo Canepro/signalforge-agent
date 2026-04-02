@@ -1,0 +1,70 @@
+name: Publish Container
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out signalforge-agent
+        uses: actions/checkout@v4
+
+      - name: Check out signalforge-collectors
+        uses: actions/checkout@v4
+        with:
+          repository: Canepro/signalforge-collectors
+          path: signalforge-collectors-source
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/canepro/signalforge-agent
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: Stage build context
+        id: stage
+        env:
+          SIGNALFORGE_COLLECTORS_REPO: ${{ github.workspace }}/signalforge-collectors-source
+        run: |
+          build_context="$(mktemp -d)"
+          ./scripts/stage-container-build-context.sh "$build_context" >/dev/null
+          echo "build_context=$build_context" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.stage.outputs.build_context }}
+          file: ${{ steps.stage.outputs.build_context }}/contrib/container/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

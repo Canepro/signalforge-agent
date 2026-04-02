@@ -138,7 +138,7 @@ spec:
       serviceAccountName: signalforge-agent
       containers:
         - name: signalforge-agent
-          image: signalforge-agent:replace-me
+          image: ghcr.io/canepro/signalforge-agent:latest
           imagePullPolicy: Always
           workingDir: /work
           args: ["run"]

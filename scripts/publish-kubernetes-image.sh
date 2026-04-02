@@ -26,8 +26,6 @@ EOF
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-WORKSPACE_DIR="$(cd "$AGENT_DIR/.." && pwd)"
-COLLECTORS_DIR="${SIGNALFORGE_COLLECTORS_REPO:-$WORKSPACE_DIR/signalforge-collectors}"
 
 REGISTRY_NAME=""
 IMAGE_REPO_TAG=""
@@ -84,12 +82,6 @@ if [[ -z "$REGISTRY_NAME" || -z "$IMAGE_REPO_TAG" ]]; then
   exit 1
 fi
 
-if [[ ! -d "$COLLECTORS_DIR" ]]; then
-  echo "Missing signalforge-collectors checkout at: $COLLECTORS_DIR" >&2
-  echo "Set SIGNALFORGE_COLLECTORS_REPO to the sibling repo path, then rerun." >&2
-  exit 1
-fi
-
 if ! command -v az >/dev/null 2>&1; then
   echo "Azure CLI is required for the optional remote ACR build path." >&2
   exit 1
@@ -109,35 +101,7 @@ else
 fi
 
 trap 'rm -rf "$BUILD_ROOT"' EXIT
-AGENT_STAGE_DIR="$BUILD_ROOT/$(basename "$AGENT_DIR")"
-COLLECTORS_STAGE_DIR="$BUILD_ROOT/$(basename "$COLLECTORS_DIR")"
-
-mkdir -p "$COLLECTORS_STAGE_DIR"
-
-tar \
-  --exclude=node_modules \
-  --exclude=.git \
-  --exclude=contrib/systemd/signalforge-agent.env \
-  --exclude=contrib/systemd/signalforge-agent.token \
-  --exclude=contrib/systemd/signalforge-agent.kubeconfig \
-  --exclude=contrib/container/signalforge-agent.container.env \
-  --exclude=contrib/container/signalforge-agent.container.token \
-  --exclude=contrib/container/signalforge-agent.container.kubeconfig \
-  -C "$AGENT_DIR" \
-  -cf - \
-  . \
-  | tar -C "$BUILD_ROOT" -xf -
-
-tar \
-  --exclude=node_modules \
-  --exclude=.git \
-  --exclude='*.env' \
-  --exclude='*.token' \
-  --exclude='*.kubeconfig' \
-  -C "$COLLECTORS_DIR" \
-  -cf - \
-  . \
-  | tar -C "$COLLECTORS_STAGE_DIR" -xf -
+"$AGENT_DIR/scripts/stage-container-build-context.sh" "$BUILD_ROOT" >/dev/null
 
 BUILD_SOURCE="$BUILD_ROOT"
 DOCKERFILE_ARG="$DOCKERFILE_PATH"

@@ -16,7 +16,7 @@ This repo treats the Kubernetes runner as:
 Cluster-side deployment is the preferred durable form for `kubernetes-bundle` collection.
 This repo keeps that path portable by separating three concerns:
 
-1. build or publish an image in whatever registry your cluster can pull from
+1. use the official image, or build and publish your own copy when you intentionally need a different registry
 2. deploy with the checked-in manifest plus the rollout script
 3. validate against a real queued job
 
@@ -26,9 +26,9 @@ proven more reliable than Bun multipart upload in the hardened cluster-side cont
 
 ## Registry stance
 
-The preferred portable image path is a public image such as:
+The preferred operator path is the official public image:
 
-- `ghcr.io/<owner>/signalforge-agent:<tag>`
+- `ghcr.io/canepro/signalforge-agent:latest`
 
 For private registries, the deploy script supports two paths:
 
@@ -39,23 +39,31 @@ For private registries, the deploy script supports two paths:
 
 - `kubectl` pointed at the target cluster
 - an enrolled SignalForge agent token for the Kubernetes source you want this runner to serve
+
+If you want to build your own registry copy instead of using the official image, you also need:
+
 - sibling repo layout:
   - `../signalforge-agent`
   - `../signalforge-collectors`
+- `az` logged into the target subscription for the optional ACR helper path
 
-If you want to use the optional Azure ACR build helper, also install `az` and log into the subscription that owns that registry.
+## 1. Use the official cluster image
 
-## 1. Publish or choose a cluster image
-
-### Portable default: use a public image
-
-Build and publish an image with your normal registry workflow, then deploy it by full reference:
+The preferred image is the official public GHCR package:
 
 ```bash
-IMAGE=ghcr.io/example/signalforge-agent:kubernetes-arm64-20260401
+IMAGE=ghcr.io/canepro/signalforge-agent:latest
+```
+
+If you need a pinned immutable tag, use a published Git tag or SHA tag from the same package:
+
+```bash
+IMAGE=ghcr.io/canepro/signalforge-agent:sha-<commit>
 ```
 
 ### Optional Azure helper: remote-build into ACR
+
+This remains available when you intentionally need your own registry copy, but it is not the preferred operator path.
 
 If your cluster pulls from Azure Container Registry and you want a checked-in remote build path:
 
@@ -70,12 +78,16 @@ is not arm64.
 
 ## 2. Deploy the cluster-side runner
 
-### Public image or already-accessible private image
+### Official image or already-accessible private image
 
 ```bash
 cd /path/to/signalforge-agent
 
-./scripts/deploy-kubernetes-agent.sh   --image ghcr.io/example/signalforge-agent:kubernetes-arm64-20260401   --signalforge-base-url https://signalforge.example.com   --agent-token-file /secure/path/signalforge-kubernetes-agent.token   --kube-context-alias prod-cluster
+./scripts/deploy-kubernetes-agent.sh \
+  --image ghcr.io/canepro/signalforge-agent:latest \
+  --signalforge-base-url https://signalforge.example.com \
+  --agent-token-file /secure/path/signalforge-kubernetes-agent.token \
+  --kube-context-alias prod-cluster
 ```
 
 ### Private registry with generic credentials
