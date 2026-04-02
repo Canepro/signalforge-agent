@@ -3,7 +3,6 @@ FROM docker.io/oven/bun:1
 USER root
 
 ARG KUBECTL_VERSION=v1.33.1
-ARG TARGETARCH=amd64
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -15,8 +14,14 @@ RUN apt-get update \
     python3 \
   && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" -o /usr/local/bin/kubectl \
-  && chmod +x /usr/local/bin/kubectl
+RUN arch="$(dpkg --print-architecture)" \
+  && case "$arch" in \
+    amd64|arm64) kubectl_arch="$arch" ;; \
+    *) echo "unsupported kubectl architecture: $arch" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${kubectl_arch}/kubectl" -o /usr/local/bin/kubectl \
+  && chmod +x /usr/local/bin/kubectl \
+  && /usr/local/bin/kubectl version --client --output=yaml >/dev/null
 
 WORKDIR /opt/signalforge/signalforge-agent
 
