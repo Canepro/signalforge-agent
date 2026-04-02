@@ -3,6 +3,9 @@
 Use this path when you want `kubernetes-bundle` collection to run as an always-on
 cluster-side agent instead of depending on a workstation session.
 
+The preferred install method is the Helm chart in `charts/signalforge-agent`.
+The raw manifest and `deploy-kubernetes-agent.sh` helper remain available as a secondary path.
+
 This repo treats the Kubernetes runner as:
 
 - a dedicated deployment in namespace `signalforge`
@@ -17,7 +20,7 @@ Cluster-side deployment is the preferred durable form for `kubernetes-bundle` co
 This repo keeps that path portable by separating three concerns:
 
 1. use the official image, or build and publish your own copy when you intentionally need a different registry
-2. deploy with the checked-in manifest plus the rollout script
+2. install the checked-in Helm chart with explicit values
 3. validate against a real queued job
 
 That keeps registry choice, cluster auth, and deployment wiring explicit instead of tied to one operator environment.
@@ -30,10 +33,7 @@ The preferred operator path is the official public image:
 
 - `ghcr.io/canepro/signalforge-agent:latest`
 
-For private registries, the deploy script supports two paths:
-
-- Azure helper: `--acr-name <name>`
-- generic docker-registry credentials: `--registry-server`, `--registry-username`, and `--registry-password-file`
+For private registries, set `image.repository`, `image.tag`, and `image.pullSecrets` in Helm values.
 
 ## Prerequisites
 
@@ -76,42 +76,53 @@ cd /path/to/signalforge-agent
 By default this publishes `linux/arm64`. Override with `--platform` only when the cluster
 is not arm64.
 
-## 2. Deploy the cluster-side runner
+## 2. Deploy the cluster-side runner with Helm
 
-### Official image or already-accessible private image
+### Official image with an inline token value
 
 ```bash
 cd /path/to/signalforge-agent
 
-./scripts/deploy-kubernetes-agent.sh \
-  --image ghcr.io/canepro/signalforge-agent:latest \
-  --signalforge-base-url https://signalforge.example.com \
-  --agent-token-file /secure/path/signalforge-kubernetes-agent.token \
-  --kube-context-alias prod-cluster
+helm upgrade --install signalforge-agent ./charts/signalforge-agent \
+  --namespace signalforge \
+  --create-namespace \
+  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set-file agent.token.value=/secure/path/signalforge-kubernetes-agent.token \
+  --set agent.kubeContextAlias=prod-cluster
 ```
 
-### Private registry with generic credentials
+### Official image with an existing Secret
 
 ```bash
-./scripts/deploy-kubernetes-agent.sh   --image registry.example.com/platform/signalforge-agent:kubernetes-arm64-20260401   --signalforge-base-url https://signalforge.example.com   --agent-token-file /secure/path/signalforge-kubernetes-agent.token   --kube-context-alias prod-cluster   --registry-server registry.example.com   --registry-username signalforge-agent   --registry-password-file /secure/path/registry.password
+helm upgrade --install signalforge-agent ./charts/signalforge-agent \
+  --namespace signalforge \
+  --create-namespace \
+  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set agent.token.existingSecret=signalforge-agent-token \
+  --set agent.kubeContextAlias=prod-cluster
 ```
 
-### Private registry via Azure helper
+### Private registry image
 
 ```bash
-./scripts/deploy-kubernetes-agent.sh   --image exampleacr.azurecr.io/signalforge-agent:kubernetes-arm64-20260401   --signalforge-base-url https://signalforge.example.com   --agent-token-file /secure/path/signalforge-kubernetes-agent.token   --kube-context-alias prod-cluster   --acr-name exampleacr
+helm upgrade --install signalforge-agent ./charts/signalforge-agent \
+  --namespace signalforge \
+  --create-namespace \
+  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set-file agent.token.value=/secure/path/signalforge-kubernetes-agent.token \
+  --set agent.kubeContextAlias=prod-cluster \
+  --set image.repository=registry.example.com/platform/signalforge-agent \
+  --set image.tag=kubernetes-arm64-20260401 \
+  --set image.pullSecrets[0]=signalforge-agent-regcred
 ```
 
-What the deploy script does:
+What the chart installs:
 
-- applies `contrib/kubernetes/deployment.yaml`
-- creates or updates the `signalforge-agent-token` secret
-- creates or updates the in-cluster kubeconfig `ConfigMap`, with an optional context alias that matches queued job scope
-- optionally creates or updates an image pull secret
-- patches the `signalforge-agent` service account with that pull secret when one is managed
-- sets the deployment image and `SIGNALFORGE_BASE_URL`
-- keeps cluster-side artifact uploads on the explicit `curl` transport
-- waits for rollout success
+- a token `Secret` unless you point the chart at an existing Secret
+- the in-cluster kubeconfig `ConfigMap`, with an optional context alias that matches queued job scope
+- the service account, read-only cluster RBAC, and deployment
+- the official image by default
+- cluster-side artifact uploads on the explicit `curl` transport
 
 ## 3. Validate the deployment
 
@@ -154,11 +165,26 @@ If SignalForge queues `collection_scope.kubectl_context`, pass the same value as
 To redeploy a new image:
 
 ```bash
-./scripts/deploy-kubernetes-agent.sh   --image <new-image>   --signalforge-base-url <signalforge-url>   --agent-token-file <token-file>
+helm upgrade signalforge-agent ./charts/signalforge-agent \
+  --namespace signalforge \
+  --reuse-values \
+  --set image.tag=<new-tag>
 ```
 
 To remove an obsolete failed namespace from earlier experiments:
 
 ```bash
 kubectl delete namespace signalforge-agent-system
+```
+
+## Secondary raw-manifest path
+
+If you deliberately want a non-Helm path, the checked-in helper still works:
+
+```bash
+./scripts/deploy-kubernetes-agent.sh \
+  --image ghcr.io/canepro/signalforge-agent:latest \
+  --signalforge-base-url https://signalforge.example.com \
+  --agent-token-file /secure/path/signalforge-kubernetes-agent.token \
+  --kube-context-alias prod-cluster
 ```

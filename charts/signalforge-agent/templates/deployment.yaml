@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "signalforge-agent.fullname" . }}
+  labels:
+    {{- include "signalforge-agent.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "signalforge-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "signalforge-agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "signalforge-agent.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: signalforge-agent
+          image: {{ include "signalforge-agent.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: {{ .Values.agent.workdir }}
+          args: ["run"]
+          env:
+            - name: SIGNALFORGE_BASE_URL
+              value: {{ required "Set signalforge.baseUrl before installing the chart." .Values.signalforge.baseUrl | quote }}
+            - name: SIGNALFORGE_AGENT_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SIGNALFORGE_AGENT_TOKEN_FILE
+              value: /var/run/signalforge-agent/token
+            - name: SIGNALFORGE_KUBECONFIG
+              value: /var/run/signalforge-agent/kubeconfig
+            - name: SIGNALFORGE_AGENT_CAPABILITIES
+              value: {{ .Values.agent.capabilities | quote }}
+            - name: SIGNALFORGE_AGENT_UPLOAD_TRANSPORT
+              value: {{ .Values.agent.uploadTransport | quote }}
+            - name: SIGNALFORGE_AGENT_WORKDIR
+              value: {{ .Values.agent.workdir | quote }}
+            - name: TMPDIR
+              value: {{ .Values.agent.workdir | quote }}
+            {{- with .Values.agent.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: token
+              mountPath: /var/run/signalforge-agent/token
+              subPath: {{ .Values.agent.token.secretKey }}
+              readOnly: true
+            - name: kubeconfig
+              mountPath: /var/run/signalforge-agent/kubeconfig
+              subPath: kubeconfig
+              readOnly: true
+            - name: workdir
+              mountPath: {{ .Values.agent.workdir }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: token
+          secret:
+            secretName: {{ include "signalforge-agent.tokenSecretName" . }}
+        - name: kubeconfig
+          configMap:
+            name: {{ include "signalforge-agent.kubeconfigName" . }}
+        - name: workdir
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

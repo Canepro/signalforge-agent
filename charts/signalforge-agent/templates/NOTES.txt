@@ -1,0 +1,10 @@
+SignalForge agent installed.
+
+Verify rollout:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "signalforge-agent.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "signalforge-agent.fullname" . }} --tail=50
+
+Queue a kubernetes-bundle job in SignalForge for the source bound to this token, then watch:
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "signalforge-agent.fullname" . }} -f
