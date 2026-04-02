@@ -91,6 +91,27 @@ helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --set agent.kubeContextAlias=prod-cluster
 ```
 
+### OKE-tested example
+
+For the Oracle Kubernetes Engine path validated during operator testing:
+
+```bash
+cd /path/to/signalforge-agent
+
+helm upgrade --install signalforge-agent ./charts/signalforge-agent \
+  --namespace signalforge \
+  --create-namespace \
+  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set-file agent.token.value=$HOME/.config/signalforge/oke-agent.token \
+  --set agent.kubeContextAlias=oke-prod-eu1
+```
+
+Expected first healthy state after rollout:
+
+- `kubectl -n signalforge rollout status deploy/signalforge-agent` succeeds
+- `kubectl -n signalforge logs deploy/signalforge-agent --tail=50` shows `poll loop started`
+- repeated `no queued job (gate=null)` means the agent is healthy and waiting for work
+
 ### Official image with an existing Secret
 
 ```bash
@@ -159,6 +180,54 @@ Success looks like:
 
 If SignalForge queues `collection_scope.kubectl_context`, pass the same value as
 `--kube-context-alias` during deployment so the in-cluster runner exposes that context name.
+
+## Troubleshooting
+
+### Helm says a resource already exists and cannot be imported
+
+This usually means you previously installed the Kubernetes agent through the raw manifest or
+`deploy-kubernetes-agent.sh`, and Helm is refusing to adopt those existing resources.
+
+Typical error shape:
+
+- `ServiceAccount "signalforge-agent" ... exists and cannot be imported into the current release`
+
+For a clean migration to Helm, remove the old raw-manifest resources first:
+
+```bash
+kubectl -n signalforge delete deploy signalforge-agent
+kubectl -n signalforge delete sa signalforge-agent
+kubectl -n signalforge delete secret signalforge-agent-token
+kubectl -n signalforge delete configmap signalforge-agent-kubeconfig
+kubectl delete clusterrole signalforge-agent-kubernetes-reader
+kubectl delete clusterrolebinding signalforge-agent-kubernetes-reader
+```
+
+Then rerun the Helm install.
+
+### The job fails with `collector_failed`
+
+Start with the previous container log:
+
+```bash
+kubectl -n signalforge logs deploy/signalforge-agent --previous --tail=200
+```
+
+If you see:
+
+- `cannot execute binary file: Exec format error`
+
+then the pod is still running an older image with the wrong-architecture `kubectl` binary.
+Upgrade to the latest published image and restart the deployment:
+
+```bash
+helm upgrade signalforge-agent ./charts/signalforge-agent \
+  --namespace signalforge \
+  --reuse-values
+
+kubectl -n signalforge rollout restart deploy/signalforge-agent
+kubectl -n signalforge rollout status deploy/signalforge-agent
+```
 
 ## Cleanup and re-roll
 

@@ -337,6 +337,17 @@ helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --set agent.kubeContextAlias=prod-cluster
 ```
 
+The validated OKE example uses the same flow with a cluster alias such as `oke-prod-eu1`:
+
+```bash
+helm upgrade --install signalforge-agent ./charts/signalforge-agent \
+  --namespace signalforge \
+  --create-namespace \
+  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set-file agent.token.value=$HOME/.config/signalforge/oke-agent.token \
+  --set agent.kubeContextAlias=oke-prod-eu1
+```
+
 If your registry is private, set the image registry values instead:
 
 ```bash
