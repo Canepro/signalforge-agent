@@ -34,7 +34,7 @@ if [[ ! -d "$COLLECTORS_DIR" ]]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
-COLLECTORS_STAGE_DIR="$OUTPUT_DIR/$(basename "$COLLECTORS_DIR")"
+COLLECTORS_STAGE_DIR="$OUTPUT_DIR/signalforge-collectors"
 mkdir -p "$COLLECTORS_STAGE_DIR"
 
 tar \
