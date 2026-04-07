@@ -43,7 +43,7 @@ Usage:
   signalforge-agent version Print version
 
 Environment (see .env.example):
-  SIGNALFORGE_BASE_URL / SIGNALFORGE_URL   SignalForge origin (no trailing slash)
+  SIGNALFORGE_BASE_URL / SIGNALFORGE_URL   SignalForge origin (no trailing slash; use ACA URL for long-lived agents)
   SIGNALFORGE_AGENT_TOKEN                Source-bound agent Bearer token
   SIGNALFORGE_AGENT_TOKEN_FILE           Optional file containing the source-bound token
   SIGNALFORGE_AGENT_INSTANCE_ID          Opaque stable id for this process

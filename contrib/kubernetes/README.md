@@ -49,6 +49,9 @@ If you want to build your own registry copy instead of using the official image,
 
 ## 1. Use the official cluster image
 
+If you want to use the optional Azure ACR build helper, also install `az` and log into the subscription that owns that registry.
+For long-lived agent traffic, use the ACA SignalForge endpoint for `--signalforge-base-url` and avoid legacy `*.vercel.app` aliases.
+
 The preferred image is the official public GHCR package:
 
 ```bash
@@ -86,7 +89,7 @@ cd /path/to/signalforge-agent
 helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --namespace signalforge \
   --create-namespace \
-  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set signalforge.baseUrl=https://signalforge.canepro.me \
   --set-file agent.token.value=/secure/path/signalforge-kubernetes-agent.token \
   --set agent.kubeContextAlias=prod-cluster
 ```
@@ -101,7 +104,7 @@ cd /path/to/signalforge-agent
 helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --namespace signalforge \
   --create-namespace \
-  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set signalforge.baseUrl=https://signalforge.canepro.me \
   --set-file agent.token.value=$HOME/.config/signalforge/oke-agent.token \
   --set agent.kubeContextAlias=oke-prod-eu1
 ```
@@ -118,7 +121,7 @@ Expected first healthy state after rollout:
 helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --namespace signalforge \
   --create-namespace \
-  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set signalforge.baseUrl=https://signalforge.canepro.me \
   --set agent.token.existingSecret=signalforge-agent-token \
   --set agent.kubeContextAlias=prod-cluster
 ```
@@ -129,7 +132,7 @@ helm upgrade --install signalforge-agent ./charts/signalforge-agent \
 helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --namespace signalforge \
   --create-namespace \
-  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set signalforge.baseUrl=https://signalforge.canepro.me \
   --set-file agent.token.value=/secure/path/signalforge-kubernetes-agent.token \
   --set agent.kubeContextAlias=prod-cluster \
   --set image.repository=registry.example.com/platform/signalforge-agent \
@@ -253,7 +256,7 @@ If you deliberately want a non-Helm path, the checked-in helper still works:
 ```bash
 ./scripts/deploy-kubernetes-agent.sh \
   --image ghcr.io/canepro/signalforge-agent:latest \
-  --signalforge-base-url https://signalforge.example.com \
+  --signalforge-base-url https://signalforge.canepro.me \
   --agent-token-file /secure/path/signalforge-kubernetes-agent.token \
   --kube-context-alias prod-cluster
 ```

@@ -44,7 +44,7 @@ All configuration is **environment variables** (see `.env.example`).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `SIGNALFORGE_BASE_URL` or `SIGNALFORGE_URL` | yes | Origin only, no trailing slash (e.g. `http://localhost:3000`) |
+| `SIGNALFORGE_BASE_URL` or `SIGNALFORGE_URL` | yes | Origin only, no trailing slash. For long-lived agent traffic, use the ACA endpoint (for example `https://signalforge.canepro.me`). |
 | `SIGNALFORGE_AGENT_TOKEN` | yes* | Bearer token from `POST /api/agent/registrations` (one source per token) |
 | `SIGNALFORGE_AGENT_TOKEN_FILE` | yes* | File containing the bearer token. Preferred for long-running services. |
 | `SIGNALFORGE_AGENT_INSTANCE_ID` | yes | Opaque stable id for **this process**; must match claim/start/fail/artifact and lease-extension heartbeats |
@@ -66,7 +66,7 @@ All configuration is **environment variables** (see `.env.example`).
 Example:
 
 ```bash
-export SIGNALFORGE_BASE_URL=http://localhost:3000
+export SIGNALFORGE_BASE_URL=https://signalforge.canepro.me
 export SIGNALFORGE_AGENT_TOKEN='…'
 export SIGNALFORGE_AGENT_INSTANCE_ID="$(hostname)-agent-1"
 export SIGNALFORGE_COLLECTORS_DIR="$HOME/src/signalforge-collectors"
@@ -332,7 +332,7 @@ For a repeatable rollout, prefer the official public image plus the checked-in c
 helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --namespace signalforge \
   --create-namespace \
-  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set signalforge.baseUrl=https://signalforge.canepro.me \
   --set-file agent.token.value=/secure/path/signalforge-kubernetes-agent.token \
   --set agent.kubeContextAlias=prod-cluster
 ```
@@ -343,7 +343,7 @@ The validated OKE example uses the same flow with a cluster alias such as `oke-p
 helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --namespace signalforge \
   --create-namespace \
-  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set signalforge.baseUrl=https://signalforge.canepro.me \
   --set-file agent.token.value=$HOME/.config/signalforge/oke-agent.token \
   --set agent.kubeContextAlias=oke-prod-eu1
 ```
@@ -354,7 +354,7 @@ If your registry is private, set the image registry values instead:
 helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --namespace signalforge \
   --create-namespace \
-  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set signalforge.baseUrl=https://signalforge.canepro.me \
   --set-file agent.token.value=/secure/path/signalforge-kubernetes-agent.token \
   --set agent.kubeContextAlias=prod-cluster \
   --set image.repository=registry.example.com/platform/signalforge-agent \
@@ -368,7 +368,7 @@ If you already manage the token as a Secret, reference it instead of passing the
 helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --namespace signalforge \
   --create-namespace \
-  --set signalforge.baseUrl=https://signalforge.example.com \
+  --set signalforge.baseUrl=https://signalforge.canepro.me \
   --set agent.token.existingSecret=signalforge-agent-token \
   --set agent.kubeContextAlias=prod-cluster
 ```
@@ -398,7 +398,7 @@ The raw-manifest helper remains available when you deliberately want a non-Helm 
 ```bash
 ./scripts/deploy-kubernetes-agent.sh \
   --image ghcr.io/canepro/signalforge-agent:latest \
-  --signalforge-base-url https://signalforge.example.com \
+  --signalforge-base-url https://signalforge.canepro.me \
   --agent-token-file /secure/path/signalforge-kubernetes-agent.token \
   --kube-context-alias prod-cluster
 ```
