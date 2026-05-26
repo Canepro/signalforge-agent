@@ -5,6 +5,8 @@
 
 import { AuthError } from "./api.ts";
 import { ConfigError, loadConfig } from "./config.ts";
+import { formatDiscoverySummary, fetchDiscoverySnapshot } from "./discovery.ts";
+import { EnrollError, enrollCollectionAgent } from "./enroll.ts";
 import { logError, logInfo, logWarn } from "./log.ts";
 import { runSingleCycle } from "./job-runner.ts";
 import { runPreflight } from "./preflight.ts";
@@ -24,7 +26,24 @@ export const EXIT = {
   API: 4,
   CLAIM_CONFLICT: 5,
   CONFIG: 6,
+  ENROLL_CONFLICT: 7,
 } as const;
+
+function loadBaseUrlFromEnv(): string {
+  const baseRaw =
+    process.env.SIGNALFORGE_BASE_URL?.trim() || process.env.SIGNALFORGE_URL?.trim();
+  if (!baseRaw) {
+    throw new ConfigError("Set SIGNALFORGE_BASE_URL (or SIGNALFORGE_URL)");
+  }
+  return baseRaw.replace(/\/+$/, "");
+}
+
+function readFlagValue(argv: string[], flag: string): string | null {
+  const idx = argv.indexOf(flag);
+  if (idx === -1) return null;
+  const value = argv[idx + 1]?.trim();
+  return value || null;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -38,12 +57,15 @@ Execution-plane agent for SignalForge: heartbeat, poll, claim, dispatch collecto
 Usage:
   signalforge-agent once    Heartbeat + process at most one queued job, then exit
   signalforge-agent run     Poll loop (SIGNALFORGE_POLL_INTERVAL_MS between cycles)
+  signalforge-agent discover Fetch auth.md + well-known registration metadata
+  signalforge-agent enroll  Operator-time registration via POST /agent/auth (admin Bearer)
   signalforge-agent preflight  Validate config and local collector/runtime readiness
   signalforge-agent help    Show this help
   signalforge-agent version Print version
 
 Environment (see .env.example):
   SIGNALFORGE_BASE_URL / SIGNALFORGE_URL   SignalForge origin (no trailing slash; use ACA URL for long-lived agents)
+  SIGNALFORGE_ADMIN_TOKEN                  Operator Bearer for enroll only (install/setup; not used by run/once)
   SIGNALFORGE_AGENT_TOKEN                Source-bound agent Bearer token
   SIGNALFORGE_AGENT_TOKEN_FILE           Optional file containing the source-bound token
   SIGNALFORGE_AGENT_INSTANCE_ID          Opaque stable id for this process
@@ -66,7 +88,73 @@ Exit codes (once mode):
   4 lease not extended, other API / upload failure
   5 claim conflict (HTTP 409)
   6 configuration error
+  7 enroll conflict (source already registered)
 `);
+}
+
+async function cmdDiscover(): Promise<number> {
+  const baseUrl = loadBaseUrlFromEnv();
+  const snapshot = await fetchDiscoverySnapshot(baseUrl);
+  console.log(formatDiscoverySummary(snapshot));
+  return EXIT.OK;
+}
+
+async function cmdEnroll(argv: string[]): Promise<number> {
+  const baseUrl = readFlagValue(argv, "--base-url") ?? loadBaseUrlFromEnv();
+  const sourceId = readFlagValue(argv, "--source-id");
+  if (!sourceId) {
+    logError("enroll requires --source-id <uuid>");
+    return EXIT.USAGE;
+  }
+
+  const adminToken =
+    readFlagValue(argv, "--admin-token") ??
+    process.env.SIGNALFORGE_ADMIN_TOKEN?.trim() ??
+    "";
+  if (!adminToken) {
+    logError("Set SIGNALFORGE_ADMIN_TOKEN or pass --admin-token for enroll");
+    return EXIT.CONFIG;
+  }
+
+  const displayName = readFlagValue(argv, "--display-name");
+  const tokenFile =
+    readFlagValue(argv, "--token-file") ??
+    process.env.SIGNALFORGE_AGENT_TOKEN_FILE?.trim() ??
+    null;
+  const printToken = argv.includes("--print-token");
+
+  try {
+    const result = await enrollCollectionAgent({
+      baseUrl,
+      sourceId,
+      displayName,
+      adminToken,
+      tokenFile,
+      printToken,
+    });
+    logInfo(`enrolled agent_id=${result.agentId} source_id=${result.sourceId}`);
+    logInfo(`register_uri=${result.registerUri}`);
+    logInfo(`token_prefix=${result.tokenPrefix}`);
+    if (result.scopes.length > 0) {
+      logInfo(`scopes=${result.scopes.join(",")}`);
+    }
+    if (result.tokenFile) {
+      logInfo(`token_file=${result.tokenFile}`);
+      logInfo("Set SIGNALFORGE_AGENT_TOKEN_FILE to this path for run/once/preflight");
+    } else if (!printToken) {
+      logWarn("Token not written to disk. Pass --token-file or --print-token, then configure SIGNALFORGE_AGENT_TOKEN or SIGNALFORGE_AGENT_TOKEN_FILE.");
+    }
+    return EXIT.OK;
+  } catch (e) {
+    if (e instanceof EnrollError) {
+      logError(e.message);
+      if (e.code === "source_already_registered") return EXIT.ENROLL_CONFLICT;
+      if (e.code === "admin_auth_failed") return EXIT.AUTH;
+      return EXIT.API;
+    }
+    logError(e instanceof Error ? e.message : String(e));
+    return EXIT.API;
+  }
 }
 
 async function cmdOnce(): Promise<number> {
@@ -79,6 +167,10 @@ async function cmdOnce(): Promise<number> {
     }
     if (r.kind === "processed") {
       logInfo(`job ${r.jobId} finished (run_status=${r.runStatus ?? "?"}, result_analysis_status=${r.analysisStatus ?? "?"})`);
+      return EXIT.OK;
+    }
+    if (r.kind === "processed_fix_action") {
+      logInfo(`fix action ${r.actionRunId} finished`);
       return EXIT.OK;
     }
     logError(r.message);
@@ -114,6 +206,9 @@ async function cmdRun(): Promise<number> {
         logInfo(
           `job ${r.jobId} finished (run_status=${r.runStatus ?? "?"}, result_analysis_status=${r.analysisStatus ?? "?"})`
         );
+        retryDelayMs = cfg.pollIntervalMs;
+      } else if (r.kind === "processed_fix_action") {
+        logInfo(`fix action ${r.actionRunId} finished`);
         retryDelayMs = cfg.pollIntervalMs;
       } else {
         logError(r.message);
@@ -178,6 +273,10 @@ async function main(): Promise<void> {
       code = await cmdRun();
     } else if (cmd === "preflight") {
       code = runPreflight(argv.slice(1));
+    } else if (cmd === "discover") {
+      code = await cmdDiscover();
+    } else if (cmd === "enroll") {
+      code = await cmdEnroll(argv.slice(1));
     } else {
       printHelp();
       code = EXIT.USAGE;

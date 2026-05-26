@@ -4,6 +4,7 @@ import {
   createClient,
   isRetryableApiFailure,
   type AgentJobSummary,
+  type FixActionSummary,
   type FetchLike,
   type SignalForgeAgentClient,
 } from "./api.ts";
@@ -14,6 +15,7 @@ import {
   runFirstAuditScript,
 } from "./collector.ts";
 import { summarizeCollectionScope } from "./collection-scope.ts";
+import { applyFixAction, dryRunFixAction, FixActionError } from "./fix-action-runner.ts";
 import { logError, logInfo, logWarn } from "./log.ts";
 const LEASE_TTL_SECONDS = 300;
 const LEASE_FAIL_CODE = "lease_not_extended";
@@ -25,6 +27,7 @@ export type IdleHeartbeatResult = {
 
 export type ProcessJobResult =
   | { kind: "processed"; jobId: string; runStatus?: string; analysisStatus?: string }
+  | { kind: "processed_fix_action"; actionRunId: string }
   | { kind: "noop"; reason: "no_job"; gate: string | null }
   | { kind: "error"; code: number; message: string; retryable?: boolean };
 
@@ -294,6 +297,102 @@ export async function processOneQueuedJob(
   }
 }
 
+export async function processOneQueuedFixAction(
+  client: SignalForgeAgentClient,
+  cfg: AgentConfig,
+  action: FixActionSummary
+): Promise<ProcessJobResult> {
+  const { instanceId } = cfg;
+  const actionRunId = action.id;
+
+  try {
+    await client.claimFixAction(actionRunId, instanceId);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (e instanceof ApiError && e.status === 409) {
+      return { kind: "error", code: 5, message: `fix action claim conflict: ${msg}`, retryable: false };
+    }
+    return {
+      kind: "error",
+      code: 4,
+      message: `fix action claim failed: ${msg}`,
+      retryable: isRetryableApiFailure(e),
+    };
+  }
+  logInfo(`claimed fix action ${actionRunId} policy=${action.policy_id}`);
+
+  try {
+    await client.startFixAction(actionRunId, instanceId);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      kind: "error",
+      code: 4,
+      message: `fix action start failed: ${msg}`,
+      retryable: isRetryableApiFailure(e),
+    };
+  }
+
+  let dryRun: Awaited<ReturnType<typeof dryRunFixAction>>;
+  try {
+    dryRun = await dryRunFixAction(cfg, action);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const summary = { error: msg };
+    try {
+      await client.submitFixDryRun(actionRunId, instanceId, "failed", summary);
+    } catch (reportErr) {
+      logWarn(`could not submit failed dry-run for fix action ${actionRunId}: ${reportErr instanceof Error ? reportErr.message : String(reportErr)}`);
+    }
+    return {
+      kind: "error",
+      code: 4,
+      message: msg,
+      retryable: !(e instanceof FixActionError) && isRetryableApiFailure(e),
+    };
+  }
+
+  await client.submitFixDryRun(actionRunId, instanceId, dryRun.status, dryRun.summary);
+  if (dryRun.status !== "passed") {
+    return {
+      kind: "error",
+      code: 4,
+      message: `fix action dry-run failed for ${actionRunId}`,
+      retryable: false,
+    };
+  }
+
+  let apply: Awaited<ReturnType<typeof applyFixAction>>;
+  try {
+    apply = await applyFixAction(cfg, action);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    try {
+      await client.submitFixApply(actionRunId, instanceId, "failed", { error: msg });
+    } catch (reportErr) {
+      logWarn(`could not submit failed apply for fix action ${actionRunId}: ${reportErr instanceof Error ? reportErr.message : String(reportErr)}`);
+    }
+    return {
+      kind: "error",
+      code: 4,
+      message: msg,
+      retryable: !(e instanceof FixActionError) && isRetryableApiFailure(e),
+    };
+  }
+  await client.submitFixApply(actionRunId, instanceId, apply.status, apply.summary);
+  if (apply.status !== "applied") {
+    return {
+      kind: "error",
+      code: 4,
+      message: `fix action apply failed for ${actionRunId}`,
+      retryable: false,
+    };
+  }
+
+  logInfo(`fix action ${actionRunId} applied`);
+  return { kind: "processed_fix_action", actionRunId };
+}
+
 /**
  * Full cycle: idle heartbeat + poll; if a job exists, process it.
  */
@@ -312,7 +411,11 @@ export async function runSingleCycle(
     options?.waitSeconds ?? 0
   );
   if (jobs.length === 0) {
-    return { kind: "noop", reason: "no_job", gate };
+    const { actions, gate: fixGate } = await client.fixActionsNext(1);
+    if (actions.length === 0) {
+      return { kind: "noop", reason: "no_job", gate: gate ?? fixGate };
+    }
+    return processOneQueuedFixAction(client, cfg, actions[0]);
   }
 
   const job = jobs[0];

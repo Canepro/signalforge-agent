@@ -105,6 +105,33 @@ export type AgentJobSummary = {
   collection_scope: CollectionScope | null;
 };
 
+export type KubernetesFixActionPayload = {
+  kind: "kubernetes_safe_patch";
+  policy_id: string;
+  action_kind: "kubernetes_patch";
+  target: {
+    api_version: string;
+    kind: string;
+    namespace: string;
+    name: string;
+    resource: string;
+    kubectl_context?: string;
+  };
+  patch_template: {
+    kind: "kubernetes_patch_template";
+    patch_type: "server_side_apply";
+    manifest: Record<string, unknown>;
+  };
+  changed_fields: string[];
+};
+
+export type FixActionSummary = {
+  id: string;
+  policy_id: string;
+  action_kind: string;
+  action_payload: KubernetesFixActionPayload;
+};
+
 async function defaultCurlRunner(
   request: CurlUploadRequest
 ): Promise<CurlUploadResponse> {
@@ -245,6 +272,40 @@ export class SignalForgeAgentClient {
     return { jobs, gate };
   }
 
+  async fixActionsNext(limit: number): Promise<{ actions: FixActionSummary[]; gate: string | null }> {
+    const data = (await this.requestJson(
+      "GET",
+      `/api/agent/fix-actions/next?limit=${encodeURIComponent(String(limit))}`
+    )) as Record<string, unknown>;
+    if (!Array.isArray(data.actions)) {
+      throw new Error("GET /api/agent/fix-actions/next returned an invalid actions payload");
+    }
+    const actions = data.actions.map((action, index) => {
+      if (!action || typeof action !== "object") {
+        throw new Error(`GET /api/agent/fix-actions/next returned malformed action entry at index ${index}`);
+      }
+      const row = action as Record<string, unknown>;
+      if (
+        typeof row.id !== "string" ||
+        typeof row.policy_id !== "string" ||
+        typeof row.action_kind !== "string" ||
+        !row.action_payload ||
+        typeof row.action_payload !== "object" ||
+        Array.isArray(row.action_payload)
+      ) {
+        throw new Error(`GET /api/agent/fix-actions/next returned malformed action entry at index ${index}`);
+      }
+      return {
+        id: row.id,
+        policy_id: row.policy_id,
+        action_kind: row.action_kind,
+        action_payload: row.action_payload as KubernetesFixActionPayload,
+      } satisfies FixActionSummary;
+    });
+    const gate = data.gate == null || data.gate === null ? null : String(data.gate);
+    return { actions, gate };
+  }
+
   async claim(jobId: string, instanceId: string, leaseTtlSeconds: number): Promise<unknown> {
     return this.requestJson("POST", `/api/collection-jobs/${jobId}/claim`, {
       instance_id: instanceId,
@@ -255,6 +316,44 @@ export class SignalForgeAgentClient {
   async start(jobId: string, instanceId: string): Promise<unknown> {
     return this.requestJson("POST", `/api/collection-jobs/${jobId}/start`, {
       instance_id: instanceId,
+    });
+  }
+
+  async claimFixAction(actionRunId: string, instanceId: string): Promise<unknown> {
+    return this.requestJson("POST", `/api/fix-action-runs/${actionRunId}/claim`, {
+      instance_id: instanceId,
+    });
+  }
+
+  async startFixAction(actionRunId: string, instanceId: string): Promise<unknown> {
+    return this.requestJson("POST", `/api/fix-action-runs/${actionRunId}/start`, {
+      instance_id: instanceId,
+    });
+  }
+
+  async submitFixDryRun(
+    actionRunId: string,
+    instanceId: string,
+    status: "passed" | "failed",
+    summary: Record<string, unknown>
+  ): Promise<unknown> {
+    return this.requestJson("POST", `/api/fix-action-runs/${actionRunId}/dry-run`, {
+      instance_id: instanceId,
+      status,
+      summary,
+    });
+  }
+
+  async submitFixApply(
+    actionRunId: string,
+    instanceId: string,
+    status: "applied" | "failed",
+    summary: Record<string, unknown>
+  ): Promise<unknown> {
+    return this.requestJson("POST", `/api/fix-action-runs/${actionRunId}/apply`, {
+      instance_id: instanceId,
+      status,
+      summary,
     });
   }
 

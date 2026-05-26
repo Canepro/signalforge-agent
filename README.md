@@ -45,7 +45,8 @@ All configuration is **environment variables** (see `.env.example`).
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `SIGNALFORGE_BASE_URL` or `SIGNALFORGE_URL` | yes | Origin only, no trailing slash. For long-lived agent traffic, use the ACA endpoint (for example `https://signalforge.canepro.me`). |
-| `SIGNALFORGE_AGENT_TOKEN` | yes* | Bearer token from `POST /api/agent/registrations` (one source per token) |
+| `SIGNALFORGE_ADMIN_TOKEN` | enroll only | Operator Bearer for `signalforge-agent enroll` at install time. Not used by `run` / `once`. |
+| `SIGNALFORGE_AGENT_TOKEN` | yes* | Bearer token from enrollment (`POST /api/agent/registrations` or `signalforge-agent enroll`) |
 | `SIGNALFORGE_AGENT_TOKEN_FILE` | yes* | File containing the bearer token. Preferred for long-running services. |
 | `SIGNALFORGE_AGENT_INSTANCE_ID` | yes | Opaque stable id for **this process**; must match claim/start/fail/artifact and lease-extension heartbeats |
 | `SIGNALFORGE_COLLECTORS_DIR` | yes* | Absolute path to **signalforge-collectors** root (family-specific collector scripts live there) |
@@ -80,6 +81,8 @@ export SIGNALFORGE_AGENT_CAPABILITIES='collect:linux-audit-log,upload:multipart'
 |---------|----------|
 | `signalforge-agent once` | Idle heartbeat → poll **one** `GET /api/agent/jobs/next` → if a job exists, claim → start → collect → `POST …/artifact` → exit |
 | `signalforge-agent run` | Idle heartbeat → long-poll `GET /api/agent/jobs/next` → process work immediately when available; sleeps by `SIGNALFORGE_POLL_INTERVAL_MS` on gate paths and claim conflicts, and uses exponential backoff up to `SIGNALFORGE_MAX_BACKOFF_MS` on transient network or retryable upstream API failures |
+| `signalforge-agent discover` | Fetch `GET /auth.md` and well-known metadata; print registration URIs and scopes |
+| `signalforge-agent enroll` | Operator-time setup: discover + `POST /agent/auth` with admin Bearer; optionally write token file |
 | `signalforge-agent preflight` | Validate config, token source, and locally runnable collector/runtime capabilities before enabling the service. This includes actual Docker or Podman reachability for container-capable hosts |
 | `signalforge-agent help` | Usage and env summary |
 | `signalforge-agent version` | Print version |
@@ -100,7 +103,9 @@ In **`run`** mode, **claim conflict (5)** is logged and the loop continues after
 
 ## End-to-end lifecycle
 
-1. **Operator** creates a **Source** and enrolls an agent: `POST /api/agent/registrations` → save `token`.
+1. **Operator** creates a **Source** and enrolls a collection agent token.
+   - UI/API: `POST /api/agent/registrations`, or
+   - auth.md path: `signalforge-agent discover` then `signalforge-agent enroll --source-id <uuid> --token-file /etc/signalforge-agent/token` (requires `SIGNALFORGE_ADMIN_TOKEN` at install time only).
 2. **Operator** clicks “Collect Fresh Evidence” (or `POST …/collection-jobs`) → job is **queued**.
 3. **Agent** `POST /api/agent/heartbeat` with a configured capability set. When not explicitly overridden, it derives that set from locally runnable collectors and always includes `upload:multipart` (required for strict gating on `jobs/next`).
 4. **Agent** `GET /api/agent/jobs/next?limit=1` (and in `run` mode, `wait_seconds` for bounded long-poll).

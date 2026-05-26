@@ -176,6 +176,7 @@ describe("loadConfig", () => {
       "collect:linux-audit-log",
       "collect:container-diagnostics",
       "collect:kubernetes-bundle",
+      "fix:kubernetes-safe",
       "upload:multipart",
     ]);
     expect(config.containerRuntime).toBe("podman");
@@ -199,6 +200,7 @@ describe("loadConfig", () => {
     expect(loadConfig().capabilities).toEqual([
       "collect:linux-audit-log",
       "collect:kubernetes-bundle",
+      "fix:kubernetes-safe",
       "upload:multipart",
     ]);
   });
@@ -221,6 +223,7 @@ describe("loadConfig", () => {
     expect(loadConfig().capabilities).toEqual([
       "collect:linux-audit-log",
       "collect:kubernetes-bundle",
+      "fix:kubernetes-safe",
       "upload:multipart",
     ]);
   });
@@ -370,6 +373,11 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         enabled: false,
         reason: "missing kubectl binary on PATH (kubectl)",
       },
+      {
+        capability: "fix:kubernetes-safe",
+        enabled: false,
+        reason: "missing kubectl binary on PATH (kubectl)",
+      },
     ]);
   });
 
@@ -406,6 +414,11 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         enabled: true,
         reason: `kubectl binary found (kubectl); kubeconfig set (${kubeconfigPath})`,
       },
+      {
+        capability: "fix:kubernetes-safe",
+        enabled: true,
+        reason: `kubectl binary found (kubectl); kubeconfig set (${kubeconfigPath})`,
+      },
     ]);
   });
 
@@ -437,6 +450,11 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         capability: "collect:kubernetes-bundle",
         enabled: false,
         reason: "missing collect-kubernetes-bundle.sh in collectors dir",
+      },
+      {
+        capability: "fix:kubernetes-safe",
+        enabled: true,
+        reason: "kubectl binary found (kubectl); using ambient/default kube context",
       },
     ]);
   });

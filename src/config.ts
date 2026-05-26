@@ -162,6 +162,16 @@ export function runtimeCapabilityChecksForEnvironment(
           : `kubectl binary found (${hints.kubectlBin}); using ambient/default kube context`
         : `missing kubectl binary on PATH (${hints.kubectlBin})`,
     },
+    {
+      capability: "fix:kubernetes-safe",
+      enabled: hasKubectl,
+      reason:
+        hasKubectl ?
+          hints.kubeconfigPath ?
+            `kubectl binary found (${hints.kubectlBin}); kubeconfig set (${hints.kubeconfigPath})`
+          : `kubectl binary found (${hints.kubectlBin}); using ambient/default kube context`
+        : `missing kubectl binary on PATH (${hints.kubectlBin})`,
+    },
   ];
 }
 

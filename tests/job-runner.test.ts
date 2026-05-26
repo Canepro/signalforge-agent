@@ -1,4 +1,4 @@
-import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -43,6 +43,7 @@ function testConfig(): AgentConfig {
       "collect:linux-audit-log",
       "collect:container-diagnostics",
       "collect:kubernetes-bundle",
+      "fix:kubernetes-safe",
       "upload:multipart",
     ],
     pollIntervalMs: 30_000,
@@ -67,6 +68,11 @@ describe("runSingleCycle", () => {
           status: 200,
         });
       }
+      if (url.includes("/api/agent/fix-actions/next")) {
+        return new Response(JSON.stringify({ actions: [], gate: null }), {
+          status: 200,
+        });
+      }
       return new Response("not found", { status: 404 });
     };
     const r = await runSingleCycle(testConfig(), fetchImpl);
@@ -83,6 +89,11 @@ describe("runSingleCycle", () => {
       if (url.includes("/api/agent/jobs/next")) {
         seenUrl = url;
         return new Response(JSON.stringify({ jobs: [], gate: null }), {
+          status: 200,
+        });
+      }
+      if (url.includes("/api/agent/fix-actions/next")) {
+        return new Response(JSON.stringify({ actions: [], gate: null }), {
           status: 200,
         });
       }
@@ -508,6 +519,118 @@ printf '{}\n' > "${producedPath}"
       await unlink(argsPath).catch(() => undefined);
       await rm(collectorsDir, { recursive: true, force: true });
       await rm(collectorWorkdir, { recursive: true, force: true });
+    }
+  });
+
+  test("claims a fix action, runs server-side dry-run, applies the approved patch, and submits evidence", async () => {
+    const actionRunId = "77777777-7777-7777-7777-777777777777";
+    const kubectlDir = await mkdtemp(join(tmpdir(), "sf-agent-kubectl-"));
+    const kubectlPath = join(kubectlDir, "kubectl");
+    const argsLog = join(kubectlDir, "kubectl-args.log");
+    const stdinLog = join(kubectlDir, "kubectl-stdin.log");
+    await writeFile(
+      kubectlPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${argsLog}"
+cat >> "${stdinLog}"
+printf '\n---END---\n' >> "${stdinLog}"
+`,
+      "utf8"
+    );
+    await chmod(kubectlPath, 0o755);
+
+    const submitted: { dryRun?: unknown; apply?: unknown } = {};
+    const fetchImpl: FetchLike = async (input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes("/api/agent/heartbeat") && method === "POST") {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/api/agent/jobs/next")) {
+        return new Response(JSON.stringify({ jobs: [], gate: null }), { status: 200 });
+      }
+      if (url.includes("/api/agent/fix-actions/next")) {
+        return new Response(
+          JSON.stringify({
+            actions: [
+              {
+                id: actionRunId,
+                policy_id: "kubernetes.disable-service-account-token-automount.v1",
+                action_kind: "kubernetes_patch",
+                action_payload: {
+                  kind: "kubernetes_safe_patch",
+                  policy_id: "kubernetes.disable-service-account-token-automount.v1",
+                  action_kind: "kubernetes_patch",
+                  target: {
+                    api_version: "apps/v1",
+                    kind: "Deployment",
+                    namespace: "payments",
+                    name: "payments-api",
+                    resource: "deployment/payments-api",
+                    kubectl_context: "prod-eu-1",
+                  },
+                  patch_template: {
+                    kind: "kubernetes_patch_template",
+                    patch_type: "server_side_apply",
+                    manifest: {
+                      apiVersion: "apps/v1",
+                      kind: "Deployment",
+                      metadata: { name: "payments-api", namespace: "payments" },
+                      spec: { template: { spec: { automountServiceAccountToken: false } } },
+                    },
+                  },
+                  changed_fields: ["spec.template.spec.automountServiceAccountToken"],
+                },
+              },
+            ],
+            gate: null,
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes(`/api/fix-action-runs/${actionRunId}/claim`)) {
+        return new Response(JSON.stringify({ id: actionRunId }), { status: 200 });
+      }
+      if (url.includes(`/api/fix-action-runs/${actionRunId}/start`)) {
+        return new Response(JSON.stringify({ id: actionRunId }), { status: 200 });
+      }
+      if (url.includes(`/api/fix-action-runs/${actionRunId}/dry-run`)) {
+        submitted.dryRun = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+        return new Response(JSON.stringify({ id: actionRunId, status: "applying" }), { status: 200 });
+      }
+      if (url.includes(`/api/fix-action-runs/${actionRunId}/apply`)) {
+        submitted.apply = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+        return new Response(JSON.stringify({ id: actionRunId, status: "applied" }), { status: 200 });
+      }
+      return new Response("unexpected", { status: 500 });
+    };
+
+    try {
+      const r = await runSingleCycle({ ...testConfig(), kubectlBin: kubectlPath }, fetchImpl);
+      expect(r).toEqual({ kind: "processed_fix_action", actionRunId });
+      const args = await readFile(argsLog, "utf8");
+      expect(args).toContain("--context prod-eu-1 apply --server-side --dry-run=server -f -");
+      expect(args).toContain("--context prod-eu-1 apply --server-side -f -");
+      const stdin = await readFile(stdinLog, "utf8");
+      expect(stdin).toContain('"automountServiceAccountToken": false');
+      expect(stdin).toContain('"name": "payments-api"');
+      expect(submitted.dryRun).toMatchObject({
+        instance_id: "test-instance",
+        status: "passed",
+        summary: {
+          resource: "deployment/payments-api",
+          namespace: "payments",
+          changed_fields: ["spec.template.spec.automountServiceAccountToken"],
+        },
+      });
+      expect(submitted.apply).toMatchObject({
+        instance_id: "test-instance",
+        status: "applied",
+        summary: { server_side_apply: true },
+      });
+    } finally {
+      await rm(kubectlDir, { recursive: true, force: true });
     }
   });
 });

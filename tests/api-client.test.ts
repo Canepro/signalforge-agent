@@ -145,6 +145,49 @@ describe("SignalForgeAgentClient", () => {
     await expect(client.jobsNext(1)).rejects.toThrow(/malformed job entry/);
   });
 
+  test("fixActionsNext parses deterministic action payloads", async () => {
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          actions: [
+            {
+              id: "action-1",
+              policy_id: "kubernetes.disable-service-account-token-automount.v1",
+              action_kind: "kubernetes_patch",
+              action_payload: {
+                kind: "kubernetes_safe_patch",
+                policy_id: "kubernetes.disable-service-account-token-automount.v1",
+                action_kind: "kubernetes_patch",
+                target: {
+                  api_version: "apps/v1",
+                  kind: "Deployment",
+                  namespace: "payments",
+                  name: "payments-api",
+                  resource: "deployment/payments-api",
+                },
+                patch_template: {
+                  kind: "kubernetes_patch_template",
+                  patch_type: "server_side_apply",
+                  manifest: {
+                    apiVersion: "apps/v1",
+                    kind: "Deployment",
+                    metadata: { name: "payments-api", namespace: "payments" },
+                    spec: { template: { spec: { automountServiceAccountToken: false } } },
+                  },
+                },
+                changed_fields: ["spec.template.spec.automountServiceAccountToken"],
+              },
+            },
+          ],
+          gate: null,
+        }),
+        { status: 200 }
+      );
+    const client = createClient("http://localhost:3000", "tok", fetchImpl);
+    const result = await client.fixActionsNext(1);
+    expect(result.actions[0].action_payload.target.resource).toBe("deployment/payments-api");
+  });
+
   test("retryable API failures exclude arbitrary local errors", () => {
     expect(
       isRetryableApiFailure(
