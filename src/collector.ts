@@ -8,6 +8,7 @@ export class CollectorError extends Error {
 
 export type ArtifactType =
   | "linux-audit-log"
+  | "mac-diagnostics"
   | "container-diagnostics"
   | "kubernetes-bundle";
 
@@ -28,6 +29,12 @@ const COLLECTOR_SPECS: Record<ArtifactType, CollectorSpec> = {
     producedFileRe:
       /^container[-_]diagnostics(?:_[a-z0-9._-]+)?_\d{8}_\d{6}\.(?:txt|log|json)$/,
     artifactType: "container-diagnostics",
+  },
+  "mac-diagnostics": {
+    script: "collect-mac-diagnostics.sh",
+    producedFileRe:
+      /^mac[-_]diagnostics(?:_[a-z0-9._-]+)?_\d{8}_\d{6}\.(?:txt|log|json)$/,
+    artifactType: "mac-diagnostics",
   },
   "kubernetes-bundle": {
     script: "collect-kubernetes-bundle.sh",
@@ -210,6 +217,13 @@ function collectorCommandForArtifactType(
   if (artifactType === "linux-audit-log") {
     if (collectionScope && collectionScope.kind !== "linux_host") {
       throw new CollectorError("linux-audit-log jobs require collection_scope.kind=linux_host");
+    }
+    return cmd;
+  }
+
+  if (artifactType === "mac-diagnostics") {
+    if (collectionScope && collectionScope.kind !== "mac_host") {
+      throw new CollectorError("mac-diagnostics jobs require collection_scope.kind=mac_host");
     }
     return cmd;
   }

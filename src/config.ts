@@ -119,6 +119,11 @@ export function runtimeCapabilityChecksForEnvironment(
         reason: "artifact override mode skips collector dispatch",
       },
       {
+        capability: "collect:mac-diagnostics",
+        enabled: false,
+        reason: "artifact override mode skips collector dispatch",
+      },
+      {
         capability: "collect:kubernetes-bundle",
         enabled: false,
         reason: "artifact override mode skips collector dispatch",
@@ -131,6 +136,7 @@ export function runtimeCapabilityChecksForEnvironment(
     collectorsDir,
     "collect-container-diagnostics.sh"
   );
+  const hasMacScript = collectorsScriptExists(collectorsDir, "collect-mac-diagnostics.sh");
   const hasKubernetesScript = collectorsScriptExists(
     collectorsDir,
     "collect-kubernetes-bundle.sh"
@@ -150,6 +156,14 @@ export function runtimeCapabilityChecksForEnvironment(
       reason:
         !hasContainerScript ? "missing collect-container-diagnostics.sh in collectors dir"
         : hints.containerRuntimeReason,
+    },
+    {
+      capability: "collect:mac-diagnostics",
+      enabled: hasMacScript && process.platform === "darwin",
+      reason:
+        !hasMacScript ? "missing collect-mac-diagnostics.sh in collectors dir"
+        : process.platform === "darwin" ? "collect-mac-diagnostics.sh found on macOS"
+        : "collect-mac-diagnostics.sh requires macOS/Darwin",
     },
     {
       capability: "collect:kubernetes-bundle",

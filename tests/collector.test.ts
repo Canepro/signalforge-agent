@@ -77,6 +77,41 @@ printf '{}\n' > ./kubernetes_bundle_payments_20260326_220000.json
     );
   });
 
+  test("runs mac diagnostics with mac host scope", async () => {
+    const dir = await makeTempDir("sf-agent-mac-collector-");
+    const capturePath = join(dir, "args.txt");
+    await writeExecutable(
+      join(dir, "collect-mac-diagnostics.sh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" > '${capturePath}'
+printf '=== mac-diagnostics ===\n' > ./mac_diagnostics_workstation_20260527_220000.txt
+`
+    );
+
+    const artifact = await runCollectorForArtifactType(dir, "mac-diagnostics", {
+      kind: "mac_host",
+    });
+
+    expect(artifact).toContain("mac_diagnostics_workstation_20260527_220000.txt");
+    expect(await readFile(capturePath, "utf8")).toBe("\n");
+  });
+
+  test("rejects non-Mac scope for mac diagnostics", async () => {
+    const dir = await makeTempDir("sf-agent-mac-scope-");
+    await writeExecutable(
+      join(dir, "collect-mac-diagnostics.sh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '=== mac-diagnostics ===\n' > ./mac_diagnostics_workstation_20260527_220000.txt
+`
+    );
+
+    await expect(
+      runCollectorForArtifactType(dir, "mac-diagnostics", { kind: "linux_host" })
+    ).rejects.toThrow("mac-diagnostics jobs require collection_scope.kind=mac_host");
+  });
+
   test("forwards kubeconfig and tmpdir environment to collector subprocesses", async () => {
     const dir = await makeTempDir("sf-agent-k8s-env-");
     const capturePath = join(dir, "env.txt");
