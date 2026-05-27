@@ -160,6 +160,7 @@ describe("loadConfig", () => {
     const collectorsDir = await makeTempDir("sf-agent-collectors-");
     const binDir = await makeTempDir("sf-agent-bin-");
     await writeExecutable(join(collectorsDir, "first-audit.sh"));
+    await writeExecutable(join(collectorsDir, "collect-mac-diagnostics.sh"));
     await writeExecutable(join(collectorsDir, "collect-container-diagnostics.sh"));
     await writeExecutable(join(collectorsDir, "collect-kubernetes-bundle.sh"));
     await writeExecutable(join(binDir, "podman"));
@@ -175,6 +176,7 @@ describe("loadConfig", () => {
     expect(config.capabilities).toEqual([
       "collect:linux-audit-log",
       "collect:container-diagnostics",
+      ...(process.platform === "darwin" ? ["collect:mac-diagnostics"] : []),
       "collect:kubernetes-bundle",
       "fix:kubernetes-safe",
       "upload:multipart",
@@ -187,6 +189,7 @@ describe("loadConfig", () => {
     const collectorsDir = await makeTempDir("sf-agent-collectors-");
     const binDir = await makeTempDir("sf-agent-bin-");
     await writeExecutable(join(collectorsDir, "first-audit.sh"));
+    await writeExecutable(join(collectorsDir, "collect-mac-diagnostics.sh"));
     await writeExecutable(join(collectorsDir, "collect-container-diagnostics.sh"));
     await writeExecutable(join(collectorsDir, "collect-kubernetes-bundle.sh"));
     await writeExecutable(join(binDir, "kubectl"));
@@ -199,6 +202,7 @@ describe("loadConfig", () => {
 
     expect(loadConfig().capabilities).toEqual([
       "collect:linux-audit-log",
+      ...(process.platform === "darwin" ? ["collect:mac-diagnostics"] : []),
       "collect:kubernetes-bundle",
       "fix:kubernetes-safe",
       "upload:multipart",
@@ -209,6 +213,7 @@ describe("loadConfig", () => {
     const collectorsDir = await makeTempDir("sf-agent-collectors-");
     const binDir = await makeTempDir("sf-agent-bin-");
     await writeExecutable(join(collectorsDir, "first-audit.sh"));
+    await writeExecutable(join(collectorsDir, "collect-mac-diagnostics.sh"));
     await writeExecutable(join(collectorsDir, "collect-container-diagnostics.sh"));
     await writeExecutable(join(collectorsDir, "collect-kubernetes-bundle.sh"));
     await writeExecutable(join(binDir, "kubectl"));
@@ -222,6 +227,7 @@ describe("loadConfig", () => {
 
     expect(loadConfig().capabilities).toEqual([
       "collect:linux-audit-log",
+      ...(process.platform === "darwin" ? ["collect:mac-diagnostics"] : []),
       "collect:kubernetes-bundle",
       "fix:kubernetes-safe",
       "upload:multipart",
@@ -369,6 +375,11 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         reason: "missing container runtime binary on PATH (docker or podman)",
       },
       {
+        capability: "collect:mac-diagnostics",
+        enabled: false,
+        reason: "missing collect-mac-diagnostics.sh in collectors dir",
+      },
+      {
         capability: "collect:kubernetes-bundle",
         enabled: false,
         reason: "missing kubectl binary on PATH (kubectl)",
@@ -410,6 +421,11 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         reason: "missing collect-container-diagnostics.sh in collectors dir",
       },
       {
+        capability: "collect:mac-diagnostics",
+        enabled: false,
+        reason: "missing collect-mac-diagnostics.sh in collectors dir",
+      },
+      {
         capability: "collect:kubernetes-bundle",
         enabled: true,
         reason: `kubectl binary found (kubectl); kubeconfig set (${kubeconfigPath})`,
@@ -445,6 +461,11 @@ describe("runtimeCapabilityChecksForEnvironment", () => {
         enabled: false,
         reason:
           "docker found but not usable: permission denied while trying to connect to the Docker daemon socket",
+      },
+      {
+        capability: "collect:mac-diagnostics",
+        enabled: false,
+        reason: "missing collect-mac-diagnostics.sh in collectors dir",
       },
       {
         capability: "collect:kubernetes-bundle",

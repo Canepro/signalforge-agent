@@ -29,4 +29,8 @@ describe("summarizeCollectionScope", () => {
       "kubernetes_scope(scope_level=namespace,namespace=payments%20prod,kubectl_context=prod-eu-1,cluster_name=aks%28prod%29,provider=aks)"
     );
   });
+
+  test("summarizes mac host scope", () => {
+    expect(summarizeCollectionScope({ kind: "mac_host" })).toBe("mac_host");
+  });
 });

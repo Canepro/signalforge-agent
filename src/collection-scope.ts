@@ -1,6 +1,7 @@
 export type ContainerRuntime = "docker" | "podman";
 
 export type LinuxHostCollectionScope = { kind: "linux_host" };
+export type MacHostCollectionScope = { kind: "mac_host" };
 
 export type ContainerTargetCollectionScope = {
   kind: "container_target";
@@ -20,6 +21,7 @@ export type KubernetesScopeCollectionScope = {
 
 export type CollectionScope =
   | LinuxHostCollectionScope
+  | MacHostCollectionScope
   | ContainerTargetCollectionScope
   | KubernetesScopeCollectionScope;
 
@@ -42,6 +44,10 @@ export function parseCollectionScope(value: unknown): CollectionScope | null {
 
   if (record.kind === "linux_host") {
     return hasOnlyKeys(record, ["kind"]) ? { kind: "linux_host" } : null;
+  }
+
+  if (record.kind === "mac_host") {
+    return hasOnlyKeys(record, ["kind"]) ? { kind: "mac_host" } : null;
   }
 
   if (record.kind === "container_target") {
@@ -109,6 +115,9 @@ export function summarizeCollectionScope(
   switch (value.kind) {
     case "linux_host": {
       return "linux_host";
+    }
+    case "mac_host": {
+      return "mac_host";
     }
     case "container_target": {
       const parts = [`container_ref=${encodeLogTokenComponent(value.container_ref)}`];
