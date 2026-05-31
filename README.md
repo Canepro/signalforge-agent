@@ -380,6 +380,9 @@ helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --set agent.kubeContextAlias=prod-cluster
 ```
 
+Set `replicaCount=0` when the cluster-side runner should stay installed but
+paused until an operator opens a bounded collection window.
+
 What the chart gives you by default:
 
 - a dedicated `signalforge` namespace for the runner itself

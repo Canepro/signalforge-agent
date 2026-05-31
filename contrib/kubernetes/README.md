@@ -126,6 +126,9 @@ helm upgrade --install signalforge-agent ./charts/signalforge-agent \
   --set agent.kubeContextAlias=prod-cluster
 ```
 
+Set `replicaCount=0` when the runner should stay installed but paused between
+operator-approved collection windows.
+
 ### Private registry image
 
 ```bash
