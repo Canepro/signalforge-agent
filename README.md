@@ -53,8 +53,8 @@ All configuration is **environment variables** (see `.env.example`).
 | `SIGNALFORGE_AGENT_WORKDIR` | no | Writable directory for collector output files. Defaults to `SIGNALFORGE_COLLECTORS_DIR`; containerized runners should usually set this to a writable volume such as `/work` |
 | `SIGNALFORGE_AGENT_UPLOAD_TRANSPORT` | no | Artifact upload transport. `fetch` by default. Use `curl` for hardened Kubernetes runners if Bun multipart upload is unreliable in that runtime |
 | `SIGNALFORGE_AGENT_CAPABILITIES` | no | Comma-separated heartbeat capabilities. When omitted, the agent derives capabilities from local readiness and always includes `upload:multipart`. Container capability now requires real Docker or Podman access, not only a binary on `PATH` |
-| `SIGNALFORGE_POLL_INTERVAL_MS` | no | Default `30000`; minimum `1000`; base sleep after gate paths and claim conflicts in `run` mode |
-| `SIGNALFORGE_POLL_ALIGNMENT_MS` | no | Optional wall-clock interval in milliseconds. Idle agents sleep to the next shared boundary instead of drifting from service start. Must be greater than or equal to the poll interval. |
+| `SIGNALFORGE_POLL_INTERVAL_MS` | no | Default `30000`; minimum `1000`; unaligned idle sleep, claim-conflict delay, and starting delay for transient retries in `run` mode |
+| `SIGNALFORGE_POLL_ALIGNMENT_MS` | no | Optional wall-clock interval in milliseconds. Empty cycles and claim conflicts sleep to the next shared boundary instead of drifting from service start. Must be greater than or equal to the poll interval; unset by default. |
 | `SIGNALFORGE_MAX_BACKOFF_MS` | no | Default `300000`; minimum `1000`; ceiling for exponential backoff on transient network or 5xx/429 API failures in `run` mode |
 | `SIGNALFORGE_JOBS_WAIT_SECONDS` | no | Default `20`; max `20`; bounded long-poll window for `GET /api/agent/jobs/next` in `run` mode |
 | `SIGNALFORGE_KUBECTL_BIN` | no | Override the `kubectl` binary name or path used for capability detection and preflight |
@@ -81,7 +81,7 @@ export SIGNALFORGE_AGENT_CAPABILITIES='collect:linux-audit-log,upload:multipart'
 | Command | Behavior |
 |---------|----------|
 | `signalforge-agent once` | Idle heartbeat → poll **one** `GET /api/agent/jobs/next` → if a job exists, claim → start → collect → `POST …/artifact` → exit |
-| `signalforge-agent run` | Idle heartbeat → long-poll `GET /api/agent/jobs/next` → process work immediately when available; sleeps by `SIGNALFORGE_POLL_INTERVAL_MS` on gate paths and claim conflicts, and uses exponential backoff up to `SIGNALFORGE_MAX_BACKOFF_MS` on transient network or retryable upstream API failures |
+| `signalforge-agent run` | Idle heartbeat → long-poll `GET /api/agent/jobs/next` → process work immediately when available; empty cycles and claim conflicts use wall-clock alignment when configured, while transient failures use exponential backoff up to `SIGNALFORGE_MAX_BACKOFF_MS` |
 | `signalforge-agent discover` | Fetch `GET /auth.md` and well-known metadata; print registration URIs and scopes |
 | `signalforge-agent enroll` | Operator-time setup: discover + `POST /agent/auth` with admin Bearer; optionally write token file |
 | `signalforge-agent preflight` | Validate config, token source, and locally runnable collector/runtime capabilities before enabling the service. This includes actual Docker or Podman reachability for container-capable hosts |
@@ -116,14 +116,19 @@ SIGNALFORGE_MAX_BACKOFF_MS=900000
 SIGNALFORGE_JOBS_WAIT_SECONDS=20
 ```
 
-Set all three millisecond values. The alignment and max backoff must be greater
-than or equal to the poll interval. Empty cycles converge on shared 15-minute
-UTC boundaries even when services start at different times. With this profile,
-a newly queued job may wait about 15 minutes for an idle agent to begin its
-next heartbeat and long-poll cycle.
-Once the agent claims a job, collection and lease heartbeats use their normal
-timing. Keep token files, capabilities, instance ids, and collector paths
-unchanged.
+Set all three millisecond values. Successful empty cycles converge on shared
+15-minute UTC boundaries even when services start at different times. This
+groups agent traffic into one control-plane wake window, but a newly queued job
+can wait up to about 15 minutes for an idle agent to begin its next poll. Agent
+last-seen age can also reach the configured idle interval; evidence freshness
+still changes only after a new collection completes and uploads an artifact.
+Once the agent receives work, collection and lease heartbeats use their normal
+timing.
+
+See [Low-traffic cost control](docs/low-traffic-cost-control.md) for the full
+cost rationale, freshness semantics, deployment checks, verified rollout proof,
+and configuration-only rollback. Keep token files, capabilities, instance ids,
+and collector paths unchanged when changing cadence.
 
 ## End-to-end lifecycle
 

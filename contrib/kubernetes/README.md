@@ -151,6 +151,29 @@ What the chart installs:
 - the official image by default
 - cluster-side artifact uploads on the explicit `curl` transport
 
+### Optional low-traffic profile
+
+For a low-use cluster runner, add the coordinated idle profile through
+`agent.extraEnv` in a values file:
+
+```yaml
+agent:
+  extraEnv:
+    - name: SIGNALFORGE_POLL_INTERVAL_MS
+      value: "900000"
+    - name: SIGNALFORGE_POLL_ALIGNMENT_MS
+      value: "900000"
+    - name: SIGNALFORGE_MAX_BACKOFF_MS
+      value: "900000"
+    - name: SIGNALFORGE_JOBS_WAIT_SECONDS
+      value: "20"
+```
+
+This reduces control-plane wake frequency but allows up to about 15 minutes of
+idle claim latency. Remove these entries to restore chart defaults. See
+[Low-traffic cost control](../../docs/low-traffic-cost-control.md) for freshness
+semantics, verification, and rollback details.
+
 ## 3. Validate the deployment
 
 Basic runtime checks:
