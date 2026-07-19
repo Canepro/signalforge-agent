@@ -26,6 +26,7 @@ export function buildPreflightLines(cfg: AgentConfig): string[] {
   );
   lines.push(`Upload transport: ${cfg.uploadTransport}`);
   lines.push(`Backoff: base ${cfg.pollIntervalMs}ms, max ${cfg.maxBackoffMs}ms`);
+  lines.push(`Idle poll alignment: ${cfg.pollAlignmentMs === null ? "off" : `${cfg.pollAlignmentMs}ms`}`);
   lines.push(`Effective capabilities: ${cfg.capabilities.join(", ")}`);
 
   for (const check of runtimeCapabilityChecksForEnvironment(

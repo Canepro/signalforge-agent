@@ -16,6 +16,7 @@ const KEYS = [
   "SIGNALFORGE_AGENT_INSTANCE_ID",
   "SIGNALFORGE_COLLECTORS_DIR",
   "SIGNALFORGE_POLL_INTERVAL_MS",
+  "SIGNALFORGE_POLL_ALIGNMENT_MS",
   "SIGNALFORGE_MAX_BACKOFF_MS",
   "SIGNALFORGE_JOBS_WAIT_SECONDS",
   "SIGNALFORGE_AGENT_ARTIFACT_FILE",
@@ -335,6 +336,23 @@ describe("loadConfig", () => {
     expect(loadConfig().maxBackoffMs).toBe(120_000);
   });
 
+  test("accepts a coordinated fifteen-minute idle cadence", () => {
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
+    process.env.SIGNALFORGE_POLL_INTERVAL_MS = "900000";
+    process.env.SIGNALFORGE_POLL_ALIGNMENT_MS = "900000";
+    process.env.SIGNALFORGE_MAX_BACKOFF_MS = "900000";
+    process.env.SIGNALFORGE_JOBS_WAIT_SECONDS = "20";
+
+    const config = loadConfig();
+    expect(config.pollIntervalMs).toBe(900_000);
+    expect(config.pollAlignmentMs).toBe(900_000);
+    expect(config.maxBackoffMs).toBe(900_000);
+    expect(config.jobsWaitSeconds).toBe(20);
+  });
+
   test("rejects max backoff under poll interval", () => {
     process.env.SIGNALFORGE_URL = "http://x";
     process.env.SIGNALFORGE_AGENT_TOKEN = "t";
@@ -342,6 +360,16 @@ describe("loadConfig", () => {
     process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
     process.env.SIGNALFORGE_POLL_INTERVAL_MS = "30000";
     process.env.SIGNALFORGE_MAX_BACKOFF_MS = "20000";
+    expect(() => loadConfig()).toThrow(ConfigError);
+  });
+
+  test("rejects wall-clock alignment below the poll interval", () => {
+    process.env.SIGNALFORGE_URL = "http://x";
+    process.env.SIGNALFORGE_AGENT_TOKEN = "t";
+    process.env.SIGNALFORGE_AGENT_INSTANCE_ID = "i";
+    process.env.SIGNALFORGE_COLLECTORS_DIR = "/tmp/c";
+    process.env.SIGNALFORGE_POLL_INTERVAL_MS = "900000";
+    process.env.SIGNALFORGE_POLL_ALIGNMENT_MS = "300000";
     expect(() => loadConfig()).toThrow(ConfigError);
   });
 });

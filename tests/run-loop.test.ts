@@ -4,6 +4,7 @@ import {
   isRetryableRunLoopError,
   isRetryableRunLoopResult,
   nextRetryDelayMs,
+  nextWallClockBoundaryDelayMs,
 } from "../src/run-loop.ts";
 
 describe("run-loop", () => {
@@ -53,5 +54,12 @@ describe("run-loop", () => {
       sleepMs: 300_000,
       nextDelayMs: 300_000,
     });
+  });
+
+  test("aligns idle polling to the next wall-clock boundary", () => {
+    const fifteenMinutes = 900_000;
+    expect(nextWallClockBoundaryDelayMs(20_000, fifteenMinutes)).toBe(880_000);
+    expect(nextWallClockBoundaryDelayMs(899_999, fifteenMinutes)).toBe(1);
+    expect(nextWallClockBoundaryDelayMs(900_000, fifteenMinutes)).toBe(900_000);
   });
 });

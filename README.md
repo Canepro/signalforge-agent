@@ -54,6 +54,7 @@ All configuration is **environment variables** (see `.env.example`).
 | `SIGNALFORGE_AGENT_UPLOAD_TRANSPORT` | no | Artifact upload transport. `fetch` by default. Use `curl` for hardened Kubernetes runners if Bun multipart upload is unreliable in that runtime |
 | `SIGNALFORGE_AGENT_CAPABILITIES` | no | Comma-separated heartbeat capabilities. When omitted, the agent derives capabilities from local readiness and always includes `upload:multipart`. Container capability now requires real Docker or Podman access, not only a binary on `PATH` |
 | `SIGNALFORGE_POLL_INTERVAL_MS` | no | Default `30000`; minimum `1000`; base sleep after gate paths and claim conflicts in `run` mode |
+| `SIGNALFORGE_POLL_ALIGNMENT_MS` | no | Optional wall-clock interval in milliseconds. Idle agents sleep to the next shared boundary instead of drifting from service start. Must be greater than or equal to the poll interval. |
 | `SIGNALFORGE_MAX_BACKOFF_MS` | no | Default `300000`; minimum `1000`; ceiling for exponential backoff on transient network or 5xx/429 API failures in `run` mode |
 | `SIGNALFORGE_JOBS_WAIT_SECONDS` | no | Default `20`; max `20`; bounded long-poll window for `GET /api/agent/jobs/next` in `run` mode |
 | `SIGNALFORGE_KUBECTL_BIN` | no | Override the `kubectl` binary name or path used for capability detection and preflight |
@@ -100,6 +101,29 @@ export SIGNALFORGE_AGENT_CAPABILITIES='collect:linux-audit-log,upload:multipart'
 | 6 | Configuration error |
 
 In **`run`** mode, **claim conflict (5)** is logged and the loop continues after the poll interval. Transient network and retryable upstream API failures (`408`, `425`, `429`, `5xx`) back off exponentially from `SIGNALFORGE_POLL_INTERVAL_MS` up to `SIGNALFORGE_MAX_BACKOFF_MS`. Other fatal errors stop the process with the same codes as above. **`401`** always stops the loop.
+
+### Low-traffic idle cadence
+
+An always-on agent sends a heartbeat, opens a bounded jobs poll, and checks for
+fix actions even when no work is queued. That traffic can keep a scale-to-zero
+control plane running. For low-use environments where delayed collection is
+acceptable, use a longer coordinated interval:
+
+```bash
+SIGNALFORGE_POLL_INTERVAL_MS=900000
+SIGNALFORGE_POLL_ALIGNMENT_MS=900000
+SIGNALFORGE_MAX_BACKOFF_MS=900000
+SIGNALFORGE_JOBS_WAIT_SECONDS=20
+```
+
+Set all three millisecond values. The alignment and max backoff must be greater
+than or equal to the poll interval. Empty cycles converge on shared 15-minute
+UTC boundaries even when services start at different times. With this profile,
+a newly queued job may wait about 15 minutes for an idle agent to begin its
+next heartbeat and long-poll cycle.
+Once the agent claims a job, collection and lease heartbeats use their normal
+timing. Keep token files, capabilities, instance ids, and collector paths
+unchanged.
 
 ## End-to-end lifecycle
 

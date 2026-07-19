@@ -14,6 +14,7 @@ import {
   isRetryableRunLoopError,
   isRetryableRunLoopResult,
   nextRetryDelayMs,
+  nextWallClockBoundaryDelayMs,
 } from "./run-loop.ts";
 
 const VERSION = "0.1.0";
@@ -72,6 +73,7 @@ Environment (see .env.example):
   SIGNALFORGE_COLLECTORS_DIR             Path to signalforge-collectors collector scripts
   SIGNALFORGE_AGENT_CAPABILITIES         Optional comma-separated heartbeat capabilities override
   SIGNALFORGE_POLL_INTERVAL_MS           Optional; default 30000 (run-mode backoff)
+  SIGNALFORGE_POLL_ALIGNMENT_MS          Optional wall-clock interval for coordinated idle polling
   SIGNALFORGE_MAX_BACKOFF_MS            Optional; default 300000 (run-mode transient error backoff ceiling)
   SIGNALFORGE_JOBS_WAIT_SECONDS          Optional; default 20, max 20 (run-mode long-poll)
   SIGNALFORGE_KUBECTL_BIN               Optional; override kubectl binary name or path
@@ -189,7 +191,7 @@ async function cmdRun(): Promise<number> {
   const cfg = loadConfig();
   let retryDelayMs = cfg.pollIntervalMs;
   logInfo(
-    `poll loop started (long-poll ${cfg.jobsWaitSeconds}s, base backoff ${cfg.pollIntervalMs}ms, max backoff ${cfg.maxBackoffMs}ms)`
+    `poll loop started (long-poll ${cfg.jobsWaitSeconds}s, base backoff ${cfg.pollIntervalMs}ms, max backoff ${cfg.maxBackoffMs}ms, wall-clock alignment ${cfg.pollAlignmentMs === null ? "off" : `${cfg.pollAlignmentMs}ms`})`
   );
   for (;;) {
     let shouldSleep = false;
@@ -200,7 +202,7 @@ async function cmdRun(): Promise<number> {
       });
       if (r.kind === "noop") {
         logInfo(`no queued job (gate=${r.gate ?? "null"})`);
-        shouldSleep = r.gate !== null;
+        shouldSleep = true;
         retryDelayMs = cfg.pollIntervalMs;
       } else if (r.kind === "processed") {
         logInfo(
@@ -245,7 +247,14 @@ async function cmdRun(): Promise<number> {
         await sleep(next.sleepMs);
       } else {
         retryDelayMs = cfg.pollIntervalMs;
-        await sleep(cfg.pollIntervalMs);
+        const sleepMs =
+          cfg.pollAlignmentMs === null ?
+            cfg.pollIntervalMs
+          : nextWallClockBoundaryDelayMs(Date.now(), cfg.pollAlignmentMs);
+        if (cfg.pollAlignmentMs !== null) {
+          logInfo(`next idle poll aligned at ${new Date(Date.now() + sleepMs).toISOString()}`);
+        }
+        await sleep(sleepMs);
       }
     }
   }

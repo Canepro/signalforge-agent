@@ -20,3 +20,8 @@ export function nextRetryDelayMs(
     nextDelayMs: Math.min(sleepMs * 2, maxDelayMs),
   };
 }
+
+export function nextWallClockBoundaryDelayMs(nowMs: number, intervalMs: number): number {
+  const remainder = nowMs % intervalMs;
+  return remainder === 0 ? intervalMs : intervalMs - remainder;
+}

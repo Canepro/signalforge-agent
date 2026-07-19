@@ -17,6 +17,8 @@ export interface AgentConfig {
   kubeconfigPath: string | null;
   capabilities: string[];
   pollIntervalMs: number;
+  /** Optional wall-clock boundary used to coordinate idle poll bursts across agents. */
+  pollAlignmentMs: number | null;
   maxBackoffMs: number;
   /** Bounded long-poll duration for jobs/next while running continuously (default 20s) */
   jobsWaitSeconds: number;
@@ -402,6 +404,21 @@ export function loadConfig(options: { probeRuntimeReadiness?: boolean } = {}): A
     pollIntervalMs = n;
   }
 
+  const pollAlignmentRaw = process.env.SIGNALFORGE_POLL_ALIGNMENT_MS?.trim();
+  let pollAlignmentMs: number | null = null;
+  if (pollAlignmentRaw) {
+    const n = parseInt(pollAlignmentRaw, 10);
+    if (Number.isNaN(n) || n < 1000) {
+      throw new ConfigError("SIGNALFORGE_POLL_ALIGNMENT_MS must be an integer >= 1000");
+    }
+    if (n < pollIntervalMs) {
+      throw new ConfigError(
+        "SIGNALFORGE_POLL_ALIGNMENT_MS must be greater than or equal to SIGNALFORGE_POLL_INTERVAL_MS"
+      );
+    }
+    pollAlignmentMs = n;
+  }
+
   const waitRaw = process.env.SIGNALFORGE_JOBS_WAIT_SECONDS?.trim();
   let jobsWaitSeconds = DEFAULT_JOBS_WAIT_SECONDS;
   if (waitRaw) {
@@ -477,6 +494,7 @@ export function loadConfig(options: { probeRuntimeReadiness?: boolean } = {}): A
     kubeconfigPath: runtimeHints.kubeconfigPath,
     capabilities,
     pollIntervalMs,
+    pollAlignmentMs,
     maxBackoffMs,
     jobsWaitSeconds,
     artifactFileOverride: override ? resolve(override) : null,
