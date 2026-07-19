@@ -100,7 +100,7 @@ export SIGNALFORGE_AGENT_CAPABILITIES='collect:linux-audit-log,upload:multipart'
 | 5 | Claim conflict (`409` on claim — another instance holds the lease) |
 | 6 | Configuration error |
 
-In **`run`** mode, **claim conflict (5)** is logged and the loop continues after the poll interval. Transient network and retryable upstream API failures (`408`, `425`, `429`, `5xx`) back off exponentially from `SIGNALFORGE_POLL_INTERVAL_MS` up to `SIGNALFORGE_MAX_BACKOFF_MS`. Other fatal errors stop the process with the same codes as above. **`401`** always stops the loop.
+In **`run`** mode, **claim conflict (5)** is logged and the loop continues at the next aligned boundary when alignment is enabled, or after the poll interval when it is not. Transient network and retryable upstream API failures (`408`, `425`, `429`, `5xx`) back off exponentially from `SIGNALFORGE_POLL_INTERVAL_MS` up to `SIGNALFORGE_MAX_BACKOFF_MS`. Other fatal errors stop the process with the same codes as above. **`401`** always stops the loop.
 
 ### Low-traffic idle cadence
 
