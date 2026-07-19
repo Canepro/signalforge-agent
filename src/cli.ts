@@ -15,6 +15,7 @@ import {
   isRetryableRunLoopResult,
   nextRetryDelayMs,
   nextWallClockBoundaryDelayMs,
+  shouldSleepAfterIdleCycle,
 } from "./run-loop.ts";
 
 const VERSION = "0.1.0";
@@ -202,7 +203,7 @@ async function cmdRun(): Promise<number> {
       });
       if (r.kind === "noop") {
         logInfo(`no queued job (gate=${r.gate ?? "null"})`);
-        shouldSleep = true;
+        shouldSleep = shouldSleepAfterIdleCycle(r);
         retryDelayMs = cfg.pollIntervalMs;
       } else if (r.kind === "processed") {
         logInfo(

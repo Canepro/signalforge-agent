@@ -10,6 +10,10 @@ export function isRetryableRunLoopError(error: unknown): boolean {
   return isRetryableApiFailure(error);
 }
 
+export function shouldSleepAfterIdleCycle(result: ProcessJobResult): boolean {
+  return result.kind === "noop";
+}
+
 export function nextRetryDelayMs(
   currentDelayMs: number,
   maxDelayMs: number

@@ -5,6 +5,7 @@ import {
   isRetryableRunLoopResult,
   nextRetryDelayMs,
   nextWallClockBoundaryDelayMs,
+  shouldSleepAfterIdleCycle,
 } from "../src/run-loop.ts";
 
 describe("run-loop", () => {
@@ -61,5 +62,21 @@ describe("run-loop", () => {
     expect(nextWallClockBoundaryDelayMs(20_000, fifteenMinutes)).toBe(880_000);
     expect(nextWallClockBoundaryDelayMs(899_999, fifteenMinutes)).toBe(1);
     expect(nextWallClockBoundaryDelayMs(900_000, fifteenMinutes)).toBe(900_000);
+  });
+
+  test("sleeps after empty long-polls with and without a gate", () => {
+    expect(
+      shouldSleepAfterIdleCycle({ kind: "noop", reason: "no_job", gate: null })
+    ).toBe(true);
+    expect(
+      shouldSleepAfterIdleCycle({
+        kind: "noop",
+        reason: "no_job",
+        gate: "capability_mismatch",
+      })
+    ).toBe(true);
+    expect(
+      shouldSleepAfterIdleCycle({ kind: "processed", jobId: "job-1" })
+    ).toBe(false);
   });
 });
